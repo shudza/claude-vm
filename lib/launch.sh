@@ -52,48 +52,73 @@ connect_vm_shell() {
     exec "${_ssh_cmd[@]}"
 }
 
-# Sync host Claude Code config into the guest VM
-# Syncs: CLAUDE.md, credentials, plugins (source + cache)
-# Skips: settings.json (host-specific paths), session state, telemetry
+# Build rsync command that tunnels over the VM's SSH connection
+# Sets: _rsync_cmd array (caller uses it)
+_build_rsync_cmd() {
+    local port="$1"
+    local ssh_key="$CLAUDE_VM_DIR/keys/id_ed25519"
+    local ssh_opts="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -p $port"
+    if [[ -f "$ssh_key" ]]; then
+        ssh_opts="ssh -i $ssh_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -p $port"
+    fi
+    _rsync_cmd=(rsync -az --no-perms --no-owner --no-group -e "$ssh_opts")
+}
+
+# Sync host config into the guest VM
+# Syncs: ~/.claude/, ~/.claude.json, ~/.gitconfig, ~/.config/gh/
+# Uses rsync for incremental transfer (only changed files after first launch)
 sync_claude_config_to_vm() {
     local port="$1"
-    local host_claude_dir="${HOME}/.claude"
-
-    if [[ ! -d "$host_claude_dir" ]]; then
-        return 0
-    fi
 
     _build_ssh_cmd "$port"
-    local ssh_cmd=("${_ssh_cmd[@]}")  # copy before exec overwrites
+    local ssh_cmd=("${_ssh_cmd[@]}")
+    _build_rsync_cmd "$port"
 
-    echo "  Syncing Claude Code config to VM..."
+    # ── Claude Code config ────────────────────────────────────────────────
+    if [[ -d "$HOME/.claude" ]]; then
+        "${_rsync_cmd[@]}" \
+            --exclude='settings.local.json' \
+            --exclude='todos' \
+            --exclude='shell-snapshots' \
+            --exclude='telemetry' \
+            --exclude='projects' \
+            --exclude='file-history' \
+            --exclude='plans' \
+            --exclude='cache' \
+            --exclude='sessions' \
+            --exclude='backups' \
+            --exclude='session-env' \
+            --exclude='history.jsonl' \
+            --exclude='paste-cache' \
+            --exclude='debug' \
+            --exclude='stats-cache.json' \
+            --exclude='tasks' \
+            "$HOME/.claude/" "claude@localhost:~/.claude/" 2>/dev/null
+    fi
 
-    # Use tar over SSH — no rsync needed on guest
-    tar -C "$host_claude_dir" -cf - \
-        --exclude='settings.local.json' \
-        --exclude='todos' \
-        --exclude='shell-snapshots' \
-        --exclude='telemetry' \
-        --exclude='projects' \
-        --exclude='file-history' \
-        --exclude='plans' \
-        --exclude='cache' \
-        --exclude='sessions' \
-        --exclude='backups' \
-        --exclude='session-env' \
-        --exclude='history.jsonl' \
-        --exclude='paste-cache' \
-        --exclude='debug' \
-        --exclude='stats-cache.json' \
-        --exclude='tasks' \
-        . 2>/dev/null | \
-    "${ssh_cmd[@]}" "mkdir -p ~/.claude && tar -C ~/.claude -xf -" 2>/dev/null
-
-    # Sync ~/.claude.json (theme, onboarding state) to skip welcome wizard
+    # ~/.claude.json (theme, onboarding state — skips welcome wizard)
     if [[ -f "$HOME/.claude.json" ]]; then
-        cat "$HOME/.claude.json" | "${ssh_cmd[@]}" "cat > ~/.claude.json" 2>/dev/null
+        "${_rsync_cmd[@]}" "$HOME/.claude.json" "claude@localhost:~/.claude.json" 2>/dev/null
     else
         "${ssh_cmd[@]}" 'echo "{\"hasCompletedOnboarding\":true}" > ~/.claude.json' 2>/dev/null
+    fi
+
+    # ── Git config ────────────────────────────────────────────────────────
+    # user.name/email are required for commits; aliases and tool prefs carry over
+    if [[ -f "$HOME/.gitconfig" ]]; then
+        "${_rsync_cmd[@]}" "$HOME/.gitconfig" "claude@localhost:~/.gitconfig" 2>/dev/null
+    fi
+    if [[ -f "${XDG_CONFIG_HOME:-$HOME/.config}/git/config" ]]; then
+        "${ssh_cmd[@]}" "mkdir -p ~/.config/git" 2>/dev/null
+        "${_rsync_cmd[@]}" "${XDG_CONFIG_HOME:-$HOME/.config}/git/config" "claude@localhost:~/.config/git/config" 2>/dev/null
+    fi
+
+    # ── GitHub CLI auth ───────────────────────────────────────────────────
+    # gh auth tokens — needed for PR/issue operations
+    local gh_config="${XDG_CONFIG_HOME:-$HOME/.config}/gh"
+    if [[ -d "$gh_config" ]]; then
+        "${ssh_cmd[@]}" "mkdir -p ~/.config/gh" 2>/dev/null
+        "${_rsync_cmd[@]}" "$gh_config/" "claude@localhost:~/.config/gh/" 2>/dev/null
     fi
 }
 
