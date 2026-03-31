@@ -1,0 +1,444 @@
+#!/usr/bin/env bash
+# claude-vm — QEMU sandbox for Claude Code
+# Provides instant, isolated sandbox environments with virtiofs filesystem sharing
+# and QEMU linked snapshots for per-project isolation.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$SCRIPT_DIR/lib"
+
+# Source library modules
+source "$LIB_DIR/config.sh"
+source "$LIB_DIR/build.sh"
+source "$LIB_DIR/launch.sh"
+
+# Show usage information
+usage() {
+    cat << 'EOF'
+claude-vm — QEMU sandbox for Claude Code
+
+Usage:
+  claude-vm                     Launch/resume sandbox for current project
+  claude-vm build [--force]     Build (or rebuild) the base image
+  claude-vm launch [DIR]        Launch sandbox for a specific directory
+  claude-vm ssh                 SSH into the running sandbox
+  claude-vm stop                Stop the running sandbox (preserves snapshot)
+  claude-vm reset               Reset project snapshot (fresh from base)
+  claude-vm destroy             Remove all sandbox artifacts for this project
+  claude-vm destroy --all       Remove ALL claude-vm data (base + all snapshots)
+  claude-vm list                List all project snapshots
+  claude-vm status              Show status of current project's sandbox
+  claude-vm config              Show effective configuration
+  claude-vm config set KEY VAL  Set a config value (e.g., VM_RAM=8G)
+  claude-vm config get KEY      Get a config value
+  claude-vm config edit         Open config file in $EDITOR
+  claude-vm help                Show this help
+
+Configuration:
+  ~/.claude-vm/config           Config file (VM_RAM, VM_CPUS, etc.)
+
+  Configurable keys:
+    VM_RAM          RAM allocation (default: 4G)
+    VM_CPUS         CPU cores (default: 2)
+    SSH_PORT_BASE   Starting SSH port (default: 10022)
+
+  Priority: defaults < config file < environment variables
+
+Environment:
+  CLAUDE_VM_DIR                 Data directory (default: ~/.claude-vm)
+  VM_RAM                        Override RAM (e.g., VM_RAM=8G claude-vm)
+  VM_CPUS                       Override CPUs (e.g., VM_CPUS=4 claude-vm)
+
+EOF
+}
+
+# Config command
+cmd_config() {
+    local subcmd="${1:-}"
+    shift 2>/dev/null || true
+
+    case "$subcmd" in
+        ""|show)
+            show_config
+            ;;
+        set)
+            if [[ $# -lt 2 ]]; then
+                # Support KEY=VALUE format
+                if [[ $# -eq 1 && "$1" == *=* ]]; then
+                    local key="${1%%=*}"
+                    local value="${1#*=}"
+                    set_config_value "$key" "$value"
+                else
+                    echo "Usage: claude-vm config set KEY VALUE" >&2
+                    echo "       claude-vm config set KEY=VALUE" >&2
+                    return 1
+                fi
+            else
+                set_config_value "$1" "$2"
+            fi
+            ;;
+        get)
+            if [[ $# -lt 1 ]]; then
+                echo "Usage: claude-vm config get KEY" >&2
+                return 1
+            fi
+            load_config
+            local key="$1"
+            case "$key" in
+                VM_RAM) echo "$VM_RAM" ;;
+                VM_CPUS) echo "$VM_CPUS" ;;
+                SSH_PORT_BASE) echo "$SSH_PORT_BASE" ;;
+                BASE_IMAGE_URL) echo "$BASE_IMAGE_URL" ;;
+                BASE_IMAGE_NAME) echo "$BASE_IMAGE_NAME" ;;
+                *)
+                    echo "Unknown config key: $key" >&2
+                    return 1
+                    ;;
+            esac
+            ;;
+        edit)
+            load_config
+            ensure_dirs
+            if [[ ! -f "$CLAUDE_VM_CONFIG" ]]; then
+                # Create default config file
+                cat > "$CLAUDE_VM_CONFIG" << 'DEFAULTS'
+# claude-vm configuration
+# Uncomment and modify values as needed.
+
+# VM_RAM="4G"
+# VM_CPUS="2"
+# SSH_PORT_BASE="10022"
+DEFAULTS
+            fi
+            "${EDITOR:-vi}" "$CLAUDE_VM_CONFIG"
+            ;;
+        --help|-h)
+            echo "Usage: claude-vm config [show|set|get|edit]"
+            echo ""
+            echo "  show              Show effective configuration (default)"
+            echo "  set KEY VALUE     Set a config value"
+            echo "  get KEY           Get a config value"
+            echo "  edit              Open config file in \$EDITOR"
+            echo ""
+            echo "Keys: VM_RAM, VM_CPUS, SSH_PORT_BASE, BASE_IMAGE_URL, BASE_IMAGE_NAME"
+            ;;
+        *)
+            echo "Unknown config subcommand: $subcmd" >&2
+            echo "Run 'claude-vm config --help' for usage." >&2
+            return 1
+            ;;
+    esac
+}
+
+# Build command
+cmd_build() {
+    local force=false
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force|--from-scratch)
+                force=true
+                shift
+                ;;
+            *)
+                echo "Unknown option: $1" >&2
+                return 1
+                ;;
+        esac
+    done
+
+    load_config
+    ensure_dirs
+
+    if base_image_exists && ! $force; then
+        echo "Base image already exists: $(base_image_path)"
+        echo "Use --force to rebuild."
+        return 0
+    fi
+
+    if $force; then
+        echo "Removing existing base image..."
+        rm -f "$(base_image_path)"
+    fi
+
+    build_base_image
+}
+
+# Launch/default command
+cmd_launch() {
+    local project_dir="${1:-$PWD}"
+    launch_vm "$project_dir"
+}
+
+# SSH command
+cmd_ssh() {
+    local project_dir="${1:-$PWD}"
+    load_config
+
+    if ! is_vm_running "$project_dir"; then
+        echo "No VM running for this project. Run 'claude-vm' to start one." >&2
+        return 1
+    fi
+
+    local ssh_port
+    ssh_port="$(get_project_ssh_port "$project_dir")"
+
+    exec ssh -o StrictHostKeyChecking=no \
+             -o UserKnownHostsFile=/dev/null \
+             -o LogLevel=ERROR \
+             -p "$ssh_port" \
+             claude@localhost
+}
+
+# Stop command
+cmd_stop() {
+    stop_vm "${1:-$PWD}"
+}
+
+# Reset command
+cmd_reset() {
+    local project_dir="${1:-$PWD}"
+    load_config
+    ensure_dirs
+
+    # Stop VM if running
+    if is_vm_running "$project_dir"; then
+        echo "Stopping running VM first..."
+        stop_vm "$project_dir"
+    fi
+
+    local snap_path
+    snap_path="$(project_snapshot_path "$project_dir")"
+
+    if [[ -f "$snap_path" ]]; then
+        rm -f "$snap_path"
+        echo "Project snapshot removed: $snap_path"
+        echo "Next launch will create a fresh snapshot from base image."
+    else
+        echo "No snapshot found for this project."
+    fi
+}
+
+# Destroy command — removes all sandbox artifacts for a project
+cmd_destroy() {
+    local all=false
+    local force=false
+    local project_dir="$PWD"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --all)
+                all=true
+                shift
+                ;;
+            --force|-f)
+                force=true
+                shift
+                ;;
+            *)
+                project_dir="$1"
+                shift
+                ;;
+        esac
+    done
+
+    load_config
+
+    if $all; then
+        echo "This will remove ALL claude-vm data:"
+        echo "  Base image: $(base_image_path)"
+        echo "  All snapshots: $SNAPSHOTS_DIR/"
+        echo "  All run data: $RUN_DIR/"
+        echo ""
+
+        if ! $force; then
+            read -rp "Are you sure? [y/N] " confirm
+            if [[ "$confirm" != [yY] ]]; then
+                echo "Cancelled."
+                return 0
+            fi
+        fi
+
+        # Stop all running VMs and virtiofsd daemons
+        if [[ -d "$RUN_DIR" ]]; then
+            for run_subdir in "$RUN_DIR"/*/; do
+                [[ -d "$run_subdir" ]] || continue
+                _kill_pid_file "${run_subdir}qemu.pid"
+                _kill_pid_file "${run_subdir}virtiofsd.pid"
+            done
+        fi
+
+        rm -rf "$CLAUDE_VM_DIR"
+        echo "All claude-vm data removed."
+    else
+        destroy_project "$project_dir"
+    fi
+}
+
+# Kill a process from a PID file if it's still alive
+_kill_pid_file() {
+    local pid_file="$1"
+    if [[ -f "$pid_file" ]]; then
+        local pid
+        pid=$(cat "$pid_file" 2>/dev/null) || return 0
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null || true
+        fi
+    fi
+}
+
+# Destroy all sandbox artifacts for a single project
+destroy_project() {
+    local project_dir="${1:-$PWD}"
+    local snap_path run_dir
+    snap_path="$(project_snapshot_path "$project_dir")"
+    run_dir="$(project_run_dir "$project_dir")"
+
+    local removed_something=false
+
+    # Stop VM if running (handles QEMU + virtiofsd)
+    if is_vm_running "$project_dir"; then
+        echo "Stopping running VM..."
+        stop_vm "$project_dir"
+    else
+        # VM not running, but virtiofsd might be orphaned — clean it up
+        _kill_pid_file "$run_dir/virtiofsd.pid"
+    fi
+
+    # Remove project snapshot
+    if [[ -f "$snap_path" ]]; then
+        rm -f "$snap_path"
+        echo "  Removed snapshot: $snap_path"
+        removed_something=true
+    fi
+
+    # Remove run directory (PID files, sockets, logs)
+    if [[ -d "$run_dir" ]]; then
+        rm -rf "$run_dir"
+        echo "  Removed run data: $run_dir"
+        removed_something=true
+    fi
+
+    if $removed_something; then
+        echo "Sandbox artifacts removed for project: $project_dir"
+    else
+        echo "No sandbox artifacts found for project: $project_dir"
+    fi
+}
+
+# List command
+cmd_list() {
+    load_config
+    ensure_dirs
+
+    echo "Project snapshots:"
+    echo ""
+
+    if [[ -d "$SNAPSHOTS_DIR" ]]; then
+        local count=0
+        for snap in "$SNAPSHOTS_DIR"/*.qcow2; do
+            if [[ -f "$snap" ]]; then
+                local hash size
+                hash=$(basename "$snap" .qcow2)
+                size=$(du -h "$snap" | cut -f1)
+                echo "  $hash  $size"
+                (( count++ ))
+            fi
+        done
+
+        if (( count == 0 )); then
+            echo "  (none)"
+        fi
+    else
+        echo "  (none)"
+    fi
+
+    echo ""
+    echo "Base image:"
+    if base_image_exists; then
+        echo "  $(du -h "$(base_image_path)" | cut -f1)  $(base_image_path)"
+    else
+        echo "  (not built)"
+    fi
+}
+
+# Status command
+cmd_status() {
+    local project_dir="${1:-$PWD}"
+    load_config
+
+    echo "Project: $project_dir"
+    echo "Hash: $(project_hash "$project_dir")"
+    echo ""
+
+    local snap_path
+    snap_path="$(project_snapshot_path "$project_dir")"
+
+    if [[ -f "$snap_path" ]]; then
+        echo "Snapshot: $snap_path ($(du -h "$snap_path" | cut -f1))"
+    else
+        echo "Snapshot: (not created)"
+    fi
+
+    if is_vm_running "$project_dir"; then
+        local ssh_port pid
+        ssh_port="$(get_project_ssh_port "$project_dir")"
+        pid=$(cat "$(project_run_dir "$project_dir")/qemu.pid" 2>/dev/null || echo "?")
+        echo "Status: RUNNING (PID: $pid, SSH port: $ssh_port)"
+    else
+        echo "Status: STOPPED"
+    fi
+
+    echo ""
+    if base_image_exists; then
+        echo "Base image: $(du -h "$(base_image_path)" | cut -f1)"
+    else
+        echo "Base image: (not built)"
+    fi
+}
+
+# Main dispatch
+main() {
+    local cmd="${1:-}"
+    shift 2>/dev/null || true
+
+    case "$cmd" in
+        ""|launch)
+            cmd_launch "$@"
+            ;;
+        build)
+            cmd_build "$@"
+            ;;
+        config)
+            cmd_config "$@"
+            ;;
+        ssh)
+            cmd_ssh "$@"
+            ;;
+        stop)
+            cmd_stop "$@"
+            ;;
+        reset)
+            cmd_reset "$@"
+            ;;
+        destroy)
+            cmd_destroy "$@"
+            ;;
+        list|ls)
+            cmd_list "$@"
+            ;;
+        status)
+            cmd_status "$@"
+            ;;
+        help|--help|-h)
+            usage
+            ;;
+        *)
+            echo "Unknown command: $cmd" >&2
+            echo "Run 'claude-vm help' for usage." >&2
+            return 1
+            ;;
+    esac
+}
+
+main "$@"
