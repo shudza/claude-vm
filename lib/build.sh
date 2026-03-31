@@ -138,7 +138,7 @@ check_build_prerequisites() {
 provision_base_image() {
     local build_img="$1"
     local ci_iso="$2"
-    local timeout=300  # 5 minute absolute timeout (safety net)
+    local timeout=600  # 10 minute absolute timeout (npm + nodejs install can be slow)
     local accel="kvm"
 
     # Check KVM availability
@@ -163,14 +163,13 @@ provision_base_image() {
         -smp "$VM_CPUS" \
         -m "$VM_RAM" \
         -drive "file=$build_img,format=qcow2,if=virtio,cache=writeback" \
-        -cdrom "$ci_iso" \
+        -drive "file=$ci_iso,format=raw,if=virtio,media=cdrom,readonly=on" \
         -netdev "user,id=net0" \
         -device "virtio-net-pci,netdev=net0" \
         -nographic \
-        -serial "file:$serial_log" \
         -monitor none \
         -no-reboot \
-        2>&1 | tail_provision_log &
+        > "$serial_log" 2>&1 &
 
     local qemu_pid=$!
     echo "$qemu_pid" > "$qemu_pid_file"

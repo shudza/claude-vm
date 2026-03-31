@@ -180,14 +180,7 @@ cmd_ssh() {
         return 1
     fi
 
-    local ssh_port
-    ssh_port="$(get_project_ssh_port "$project_dir")"
-
-    exec ssh -o StrictHostKeyChecking=no \
-             -o UserKnownHostsFile=/dev/null \
-             -o LogLevel=ERROR \
-             -p "$ssh_port" \
-             claude@localhost
+    connect_vm "$(get_project_ssh_port "$project_dir")"
 }
 
 # Stop command

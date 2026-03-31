@@ -8,7 +8,20 @@ set -euo pipefail
 # Generate cloud-init user-data for base image provisioning
 generate_cloud_init_userdata() {
     local output_dir="$1"
-    cat > "$output_dir/user-data" << 'USERDATA'
+
+    # Ensure SSH keypair exists for VM access
+    local key_dir="${CLAUDE_VM_DIR:-$HOME/.claude-vm}/keys"
+    local key_path="$key_dir/id_ed25519"
+    if [[ ! -f "$key_path" ]]; then
+        mkdir -p "$key_dir"
+        chmod 700 "$key_dir"
+        ssh-keygen -t ed25519 -f "$key_path" -N "" -C "claude-vm" -q
+        chmod 600 "$key_path"
+    fi
+    local pub_key
+    pub_key=$(cat "${key_path}.pub")
+
+    cat > "$output_dir/user-data" << USERDATA
 #cloud-config
 # claude-vm base image provisioning
 
@@ -22,8 +35,9 @@ users:
     sudo: ALL=(ALL) NOPASSWD:ALL
     lock_passwd: false
     # Password: claude (for emergency console access)
-    passwd: $6$rounds=4096$saltsalt$ZKMEXv3MnQXpWLGfKsHrOjfFjCGPQY0fAXlxqYFwC.dqI6/dR7bEvFRNABpiRPfOJYCkLKOGnSq1EFqLm9ER1
-    ssh_authorized_keys: []
+    passwd: \$6\$rounds=4096\$saltsalt\$ZKMEXv3MnQXpWLGfKsHrOjfFjCGPQY0fAXlxqYFwC.dqI6/dR7bEvFRNABpiRPfOJYCkLKOGnSq1EFqLm9ER1
+    ssh_authorized_keys:
+      - $pub_key
 
 # Install essential packages (minimal set for speed)
 packages:
@@ -52,19 +66,14 @@ write_files:
     permissions: '0644'
   - path: /home/claude/.bashrc
     content: |
-      export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"
-      export NPM_CONFIG_PREFIX="$HOME/.npm-global"
+      export PATH="\$HOME/.local/bin:\$HOME/.npm-global/bin:\$PATH"
+      export NPM_CONFIG_PREFIX="\$HOME/.npm-global"
       # Auto-mount workspace hint
       if [ -d /workspace ]; then
         cd /workspace 2>/dev/null
       fi
     permissions: '0644'
-    owner: claude:claude
-  - path: /etc/fstab
-    content: |
-      # virtiofs workspace mount
-      workspace /workspace virtiofs defaults,nofail 0 0
-    append: true
+    defer: true
   - path: /etc/modules-load.d/virtiofs.conf
     content: |
       virtiofs
@@ -100,17 +109,15 @@ write_files:
       [Install]
       WantedBy=multi-user.target
     permissions: '0644'
-  - path: /home/claude/.ssh/authorized_keys
-    content: ""
-    permissions: '0600'
-    owner: claude:claude
-    defer: true
 
 # Run commands for provisioning
 runcmd:
-  # Create workspace mount point
+  # Create workspace mount point and add fstab entry
   - mkdir -p /workspace
+  - grep -q 'virtiofs' /etc/fstab || echo 'workspace /workspace virtiofs defaults,nofail 0 0' >> /etc/fstab
   - chown claude:claude /workspace
+  # Fix ownership of deferred write_files
+  - chown -R claude:claude /home/claude/.bashrc /home/claude/.ssh
   # Create npm global dir
   - sudo -u claude mkdir -p /home/claude/.npm-global
   # Install Node.js via nodesource (LTS)
@@ -155,15 +162,13 @@ local-hostname: claude-vm
 METADATA
 }
 
-# Generate cloud-init network-config (use DHCP on default interface)
+# Generate cloud-init network-config
 generate_cloud_init_network() {
     local output_dir="$1"
     cat > "$output_dir/network-config" << 'NETCONFIG'
 version: 2
 ethernets:
-  id0:
-    match:
-      driver: virtio
+  enp0s2:
     dhcp4: true
 NETCONFIG
 }

@@ -9,6 +9,28 @@ source "$SCRIPT_DIR/config.sh"
 source "$SCRIPT_DIR/virtiofs.sh"
 source "$SCRIPT_DIR/shutdown.sh"
 
+# Connect to a running VM via SSH (exec replaces current process)
+# Args: $1 = SSH port
+connect_vm() {
+    local port="$1"
+    local ssh_key="$CLAUDE_VM_DIR/keys/id_ed25519"
+    local key_opt=()
+    if [[ -f "$ssh_key" ]]; then
+        key_opt=(-i "$ssh_key")
+    fi
+    exec ssh "${key_opt[@]}" \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -o LogLevel=ERROR \
+        -p "$port" \
+        claude@localhost
+}
+
+# SSH key path for this install
+_ssh_key_path() {
+    echo "$CLAUDE_VM_DIR/keys/id_ed25519"
+}
+
 # Find an available port starting from a base
 find_available_port() {
     local base_port="$1"
@@ -68,13 +90,9 @@ launch_vm() {
     base_img="$(base_image_path)"
     run_dir="$(project_run_dir "$project_dir")"
 
-    # Check if VM is already running
+    # Check if VM is already running — connect to it
     if is_vm_running "$project_dir"; then
-        local ssh_port
-        ssh_port="$(get_project_ssh_port "$project_dir")"
-        echo "VM already running for this project."
-        echo "SSH: ssh -p $ssh_port claude@localhost"
-        return 0
+        connect_vm "$(get_project_ssh_port "$project_dir")"
     fi
 
     # Build base image if needed
@@ -142,8 +160,8 @@ launch_vm() {
         -chardev "socket,id=vhost-fs,path=$virtiofs_sock"
         -device "vhost-user-fs-pci,chardev=vhost-fs,tag=workspace,queue-size=1024"
 
-        # No graphics
-        -nographic
+        # No graphics — use -display none (compatible with -daemonize)
+        -display none
         -serial "file:$run_dir/serial.log"
         -monitor "unix:$run_dir/monitor.sock,server,nowait"
 
@@ -159,20 +177,23 @@ launch_vm() {
     echo "  VM started (PID: $(cat "$run_dir/qemu.pid"))"
 
     # Wait for SSH to become available
+    local ssh_key
+    ssh_key="$(_ssh_key_path)"
     echo "  Waiting for SSH..."
-    wait_for_ssh "$ssh_port" 60
+    wait_for_ssh "$ssh_port" 60 "$ssh_key"
 
     # Ensure virtiofs workspace is mounted in guest
     echo "  Verifying virtiofs mount..."
-    virtiofs_ensure_mounted "$ssh_port" "" "claude"
+    virtiofs_ensure_mounted "$ssh_port" "$ssh_key" "claude"
 
     local elapsed=$(( $(date +%s) - start_time ))
     echo ""
     echo "==> VM ready in ${elapsed}s"
-    echo "    SSH: ssh -p $ssh_port claude@localhost"
     echo "    Project: $project_dir → /workspace (virtiofs)"
     echo ""
-    echo "    Run 'claude-vm ssh' to connect"
+
+    # Drop into the VM shell
+    connect_vm "$ssh_port"
 }
 
 # Start virtiofsd for a project directory
@@ -228,10 +249,16 @@ start_virtiofsd() {
 wait_for_ssh() {
     local port="$1"
     local timeout="${2:-60}"
+    local ssh_key="${3:-}"
     local waited=0
 
+    local key_opt=()
+    if [[ -n "$ssh_key" && -f "$ssh_key" ]]; then
+        key_opt=(-i "$ssh_key")
+    fi
+
     while (( waited < timeout )); do
-        if ssh -o ConnectTimeout=1 -o StrictHostKeyChecking=no \
+        if ssh "${key_opt[@]}" -o ConnectTimeout=2 -o StrictHostKeyChecking=no \
                -o UserKnownHostsFile=/dev/null \
                -o BatchMode=yes \
                -p "$port" claude@localhost true 2>/dev/null; then
@@ -239,7 +266,7 @@ wait_for_ssh() {
             return 0
         fi
         sleep 1
-        (( waited++ ))
+        (( ++waited ))
         if (( waited % 5 == 0 )); then
             echo "  ... waiting for SSH (${waited}s)"
         fi
