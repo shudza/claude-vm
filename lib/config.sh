@@ -12,8 +12,36 @@ CLAUDE_VM_CONFIG="${CLAUDE_VM_CONFIG:-$CLAUDE_VM_DIR/config}"
 DEFAULT_RAM="4G"
 DEFAULT_CPUS="2"
 DEFAULT_SSH_PORT_BASE="10022"
-DEFAULT_BASE_IMAGE_URL="https://cloud-images.ubuntu.com/minimal/releases/noble/release/ubuntu-24.04-minimal-cloudimg-amd64.img"
-DEFAULT_BASE_IMAGE_NAME="ubuntu-24.04-minimal-cloudimg-amd64.img"
+DEFAULT_FLAVOR="debian"
+
+# ── Flavor registry ──────────────────────────────────────────────────────────
+# Each flavor defines: image URL, image filename, package manager family
+# Cloud-init userdata generation is dispatched by flavor in cloud-init.sh
+
+declare -A FLAVOR_IMAGE_URL=(
+    [debian]="https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2"
+    [ubuntu]="https://cloud-images.ubuntu.com/minimal/releases/noble/release/ubuntu-24.04-minimal-cloudimg-amd64.img"
+)
+
+declare -A FLAVOR_IMAGE_NAME=(
+    [debian]="debian-12-genericcloud-amd64.qcow2"
+    [ubuntu]="ubuntu-24.04-minimal-cloudimg-amd64.img"
+)
+
+declare -A FLAVOR_PKG_FAMILY=(
+    [debian]="apt"
+    [ubuntu]="apt"
+)
+
+# List valid flavor names
+valid_flavors() {
+    echo "${!FLAVOR_IMAGE_URL[@]}" | tr ' ' '\n' | sort
+}
+
+# Check if a flavor name is valid
+is_valid_flavor() {
+    [[ -n "${FLAVOR_IMAGE_URL[$1]+x}" ]]
+}
 
 # Derived paths
 BASE_IMAGES_DIR="$CLAUDE_VM_DIR/base"
@@ -28,6 +56,7 @@ load_config() {
     local _env_ram="${VM_RAM:-}"
     local _env_cpus="${VM_CPUS:-}"
     local _env_ssh_port="${SSH_PORT_BASE:-}"
+    local _env_flavor="${FLAVOR:-}"
     local _env_image_url="${BASE_IMAGE_URL:-}"
     local _env_image_name="${BASE_IMAGE_NAME:-}"
 
@@ -35,8 +64,7 @@ load_config() {
     VM_RAM="$DEFAULT_RAM"
     VM_CPUS="$DEFAULT_CPUS"
     SSH_PORT_BASE="$DEFAULT_SSH_PORT_BASE"
-    BASE_IMAGE_URL="$DEFAULT_BASE_IMAGE_URL"
-    BASE_IMAGE_NAME="$DEFAULT_BASE_IMAGE_NAME"
+    FLAVOR="$DEFAULT_FLAVOR"
 
     # Override from config file if it exists
     if [[ -f "$CLAUDE_VM_CONFIG" ]]; then
@@ -48,8 +76,18 @@ load_config() {
     [[ -n "$_env_ram" ]] && VM_RAM="$_env_ram"
     [[ -n "$_env_cpus" ]] && VM_CPUS="$_env_cpus"
     [[ -n "$_env_ssh_port" ]] && SSH_PORT_BASE="$_env_ssh_port"
-    [[ -n "$_env_image_url" ]] && BASE_IMAGE_URL="$_env_image_url"
-    [[ -n "$_env_image_name" ]] && BASE_IMAGE_NAME="$_env_image_name"
+    [[ -n "$_env_flavor" ]] && FLAVOR="$_env_flavor"
+
+    # Derive image URL/name from flavor (explicit overrides still win)
+    if is_valid_flavor "$FLAVOR"; then
+        BASE_IMAGE_URL="${_env_image_url:-${FLAVOR_IMAGE_URL[$FLAVOR]}}"
+        BASE_IMAGE_NAME="${_env_image_name:-${FLAVOR_IMAGE_NAME[$FLAVOR]}}"
+    else
+        echo "WARNING: Unknown flavor '$FLAVOR', falling back to debian" >&2
+        FLAVOR="debian"
+        BASE_IMAGE_URL="${_env_image_url:-${FLAVOR_IMAGE_URL[debian]}}"
+        BASE_IMAGE_NAME="${_env_image_name:-${FLAVOR_IMAGE_NAME[debian]}}"
+    fi
 
     return 0
 }
@@ -67,11 +105,12 @@ show_config() {
         echo "# Status: not found (using defaults)"
     fi
     echo ""
+    echo "FLAVOR=\"$FLAVOR\""
     echo "VM_RAM=\"$VM_RAM\""
     echo "VM_CPUS=\"$VM_CPUS\""
     echo "SSH_PORT_BASE=\"$SSH_PORT_BASE\""
-    echo "BASE_IMAGE_URL=\"$BASE_IMAGE_URL\""
-    echo "BASE_IMAGE_NAME=\"$BASE_IMAGE_NAME\""
+    echo "BASE_IMAGE_URL=\"$BASE_IMAGE_URL\"  # derived from FLAVOR"
+    echo "BASE_IMAGE_NAME=\"$BASE_IMAGE_NAME\"  # derived from FLAVOR"
 }
 
 # Set a config key=value in the config file
@@ -81,16 +120,23 @@ set_config_value() {
 
     # Validate key is a known config option
     case "$key" in
-        VM_RAM|VM_CPUS|SSH_PORT_BASE|BASE_IMAGE_URL|BASE_IMAGE_NAME) ;;
+        FLAVOR|VM_RAM|VM_CPUS|SSH_PORT_BASE|BASE_IMAGE_URL|BASE_IMAGE_NAME) ;;
         *)
             echo "Unknown config key: $key" >&2
-            echo "Valid keys: VM_RAM, VM_CPUS, SSH_PORT_BASE, BASE_IMAGE_URL, BASE_IMAGE_NAME" >&2
+            echo "Valid keys: FLAVOR, VM_RAM, VM_CPUS, SSH_PORT_BASE, BASE_IMAGE_URL, BASE_IMAGE_NAME" >&2
             return 1
             ;;
     esac
 
     # Validate resource values
     case "$key" in
+        FLAVOR)
+            if ! is_valid_flavor "$value"; then
+                echo "Unknown flavor: $value" >&2
+                echo "Valid flavors: $(valid_flavors | tr '\n' ' ')" >&2
+                return 1
+            fi
+            ;;
         VM_RAM)
             if ! [[ "$value" =~ ^[0-9]+[GMgm]$ ]]; then
                 echo "Invalid RAM value: $value (use e.g., 4G, 8G, 512M)" >&2

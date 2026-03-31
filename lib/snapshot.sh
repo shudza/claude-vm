@@ -70,6 +70,9 @@ create_project_snapshot() {
         return 1
     fi
 
+    # Store project directory path as sidecar metadata (for cmd_list)
+    echo "$project_dir" > "$SNAPSHOTS_DIR/${hash}.project"
+
     echo "  Snapshot created ($(du -h "$snap_path" | cut -f1) initial — grows on write)"
     return 0
 }
@@ -178,9 +181,17 @@ list_snapshots() {
             continue
         fi
 
-        local hash size actual_size backing
+        local hash size actual_size backing project_dir_label
         hash="$(basename "$snap" .qcow2)"
         size="$(du -h "$snap" | cut -f1)"
+
+        # Read project directory from sidecar file
+        local project_file="$SNAPSHOTS_DIR/${hash}.project"
+        if [[ -f "$project_file" ]]; then
+            project_dir_label="$(cat "$project_file")"
+        else
+            project_dir_label="(unknown)"
+        fi
 
         # Get virtual size and backing file from qemu-img
         local info_json
@@ -191,7 +202,8 @@ list_snapshots() {
 
         backing="$(echo "$info_json" | jq -r '.["backing-filename"] // "none"' 2>/dev/null || echo "unknown")"
 
-        echo "  $hash  disk=$size  actual=$actual_size_human  backing=$(basename "$backing" 2>/dev/null || echo "$backing")"
+        echo "  $project_dir_label"
+        echo "    $hash  disk=$size  actual=$actual_size_human  backing=$(basename "$backing" 2>/dev/null || echo "$backing")"
         count=$(( count + 1 ))
     done
 
@@ -218,7 +230,9 @@ delete_snapshot() {
         return 0
     fi
 
-    rm -f "$snap_path"
+    local hash
+    hash="$(project_hash "$project_dir")"
+    rm -f "$snap_path" "$SNAPSHOTS_DIR/${hash}.project"
     echo "Snapshot deleted: $snap_path"
 }
 
@@ -230,7 +244,9 @@ delete_all_snapshots() {
     local count=0
     for snap in "$SNAPSHOTS_DIR"/*.qcow2; do
         if [[ -f "$snap" ]]; then
-            rm -f "$snap"
+            local hash
+            hash="$(basename "$snap" .qcow2)"
+            rm -f "$snap" "$SNAPSHOTS_DIR/${hash}.project"
             count=$(( count + 1 ))
         fi
     done

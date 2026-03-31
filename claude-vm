@@ -20,7 +20,7 @@ claude-vm — QEMU sandbox for Claude Code
 
 Usage:
   claude-vm                     Launch sandbox and enter Claude Code
-  claude-vm build [--force]     Build (or rebuild) the base image
+  claude-vm build [--flavor X]  Build (or rebuild) the base image
   claude-vm launch [DIR]        Launch sandbox for a specific directory
   claude-vm ssh                 SSH shell into the running sandbox
   claude-vm stop                Stop the running sandbox (preserves snapshot)
@@ -35,10 +35,15 @@ Usage:
   claude-vm config edit         Open config file in $EDITOR
   claude-vm help                Show this help
 
+Flavors:
+  debian (default)              Debian 12 genericcloud — minimal, no snapd
+  ubuntu                        Ubuntu 24.04 minimal cloud image
+
 Configuration:
-  ~/.claude-vm/config           Config file (VM_RAM, VM_CPUS, etc.)
+  ~/.claude-vm/config           Config file (FLAVOR, VM_RAM, VM_CPUS, etc.)
 
   Configurable keys:
+    FLAVOR          Base image flavor (default: debian)
     VM_RAM          RAM allocation (default: 4G)
     VM_CPUS         CPU cores (default: 2)
     SSH_PORT_BASE   Starting SSH port (default: 10022)
@@ -47,6 +52,7 @@ Configuration:
 
 Environment:
   CLAUDE_VM_DIR                 Data directory (default: ~/.claude-vm)
+  FLAVOR                        Override flavor (e.g., FLAVOR=ubuntu claude-vm build)
   VM_RAM                        Override RAM (e.g., VM_RAM=8G claude-vm)
   VM_CPUS                       Override CPUs (e.g., VM_CPUS=4 claude-vm)
 
@@ -86,6 +92,7 @@ cmd_config() {
             load_config
             local key="$1"
             case "$key" in
+                FLAVOR) echo "$FLAVOR" ;;
                 VM_RAM) echo "$VM_RAM" ;;
                 VM_CPUS) echo "$VM_CPUS" ;;
                 SSH_PORT_BASE) echo "$SSH_PORT_BASE" ;;
@@ -121,7 +128,7 @@ DEFAULTS
             echo "  get KEY           Get a config value"
             echo "  edit              Open config file in \$EDITOR"
             echo ""
-            echo "Keys: VM_RAM, VM_CPUS, SSH_PORT_BASE, BASE_IMAGE_URL, BASE_IMAGE_NAME"
+            echo "Keys: FLAVOR, VM_RAM, VM_CPUS, SSH_PORT_BASE, BASE_IMAGE_URL, BASE_IMAGE_NAME"
             ;;
         *)
             echo "Unknown config subcommand: $subcmd" >&2
@@ -134,10 +141,19 @@ DEFAULTS
 # Build command
 cmd_build() {
     local force=false
+    local flavor_override=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --force|--from-scratch)
                 force=true
+                shift
+                ;;
+            --flavor)
+                flavor_override="$2"
+                shift 2
+                ;;
+            --flavor=*)
+                flavor_override="${1#*=}"
                 shift
                 ;;
             *)
@@ -148,6 +164,19 @@ cmd_build() {
     done
 
     load_config
+
+    # Apply flavor override (takes priority over config file)
+    if [[ -n "$flavor_override" ]]; then
+        if ! is_valid_flavor "$flavor_override"; then
+            echo "Unknown flavor: $flavor_override" >&2
+            echo "Valid flavors: $(valid_flavors | tr '\n' ' ')" >&2
+            return 1
+        fi
+        FLAVOR="$flavor_override"
+        BASE_IMAGE_URL="${FLAVOR_IMAGE_URL[$FLAVOR]}"
+        BASE_IMAGE_NAME="${FLAVOR_IMAGE_NAME[$FLAVOR]}"
+    fi
+
     ensure_dirs
 
     if base_image_exists && ! $force; then
@@ -204,7 +233,9 @@ cmd_reset() {
     snap_path="$(project_snapshot_path "$project_dir")"
 
     if [[ -f "$snap_path" ]]; then
-        rm -f "$snap_path"
+        local hash
+        hash="$(project_hash "$project_dir")"
+        rm -f "$snap_path" "$SNAPSHOTS_DIR/${hash}.project"
         echo "Project snapshot removed: $snap_path"
         echo "Next launch will create a fresh snapshot from base image."
     else
@@ -331,10 +362,27 @@ cmd_list() {
         local count=0
         for snap in "$SNAPSHOTS_DIR"/*.qcow2; do
             if [[ -f "$snap" ]]; then
-                local hash size
+                local hash size project_dir_label status_label
                 hash=$(basename "$snap" .qcow2)
                 size=$(du -h "$snap" | cut -f1)
-                echo "  $hash  $size"
+
+                # Read project directory from sidecar file
+                local project_file="$SNAPSHOTS_DIR/${hash}.project"
+                if [[ -f "$project_file" ]]; then
+                    project_dir_label="$(cat "$project_file")"
+                else
+                    project_dir_label="(unknown)"
+                fi
+
+                # Check if VM is running for this snapshot
+                if [[ -f "$RUN_DIR/$hash/qemu.pid" ]] && kill -0 "$(cat "$RUN_DIR/$hash/qemu.pid" 2>/dev/null)" 2>/dev/null; then
+                    status_label="RUNNING"
+                else
+                    status_label="stopped"
+                fi
+
+                echo "  $project_dir_label"
+                echo "    $hash  $size  [$status_label]"
                 (( count++ ))
             fi
         done
@@ -378,6 +426,12 @@ cmd_status() {
         ssh_port="$(get_project_ssh_port "$project_dir")"
         pid=$(cat "$(project_run_dir "$project_dir")/qemu.pid" 2>/dev/null || echo "?")
         echo "Status: RUNNING (PID: $pid, SSH port: $ssh_port)"
+
+        # Count active Claude Code instances in the VM
+        _build_ssh_cmd "$ssh_port"
+        local instances
+        instances=$("${_ssh_cmd[@]}" "pgrep -c -f 'claude' 2>/dev/null" 2>/dev/null || echo "0")
+        echo "Claude Code instances: $instances"
     else
         echo "Status: STOPPED"
     fi

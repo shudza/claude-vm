@@ -6,8 +6,10 @@
 set -euo pipefail
 
 # Generate cloud-init user-data for base image provisioning
+# Dispatches to flavor-specific sections for packages and runcmd
 generate_cloud_init_userdata() {
     local output_dir="$1"
+    local flavor="${FLAVOR:-debian}"
 
     # Ensure SSH keypair exists for VM access
     local key_dir="${CLAUDE_VM_DIR:-$HOME/.claude-vm}/keys"
@@ -21,14 +23,30 @@ generate_cloud_init_userdata() {
     local pub_key
     pub_key=$(cat "${key_path}.pub")
 
+    # Flavor-specific: packages list
+    local packages_block
+    packages_block="$(_cloud_init_packages "$flavor")"
+
+    # Flavor-specific: runcmd for Node.js, gh, and cleanup
+    local nodejs_runcmd
+    nodejs_runcmd="$(_cloud_init_nodejs_runcmd "$flavor")"
+
+    local gh_runcmd
+    gh_runcmd="$(_cloud_init_gh_runcmd "$flavor")"
+
+    local cleanup_runcmd
+    cleanup_runcmd="$(_cloud_init_cleanup_runcmd "$flavor")"
+
+    # SSH service name differs
+    local ssh_service
+    ssh_service="$(_cloud_init_ssh_service "$flavor")"
+
     cat > "$output_dir/user-data" << USERDATA
 #cloud-config
-# claude-vm base image provisioning
+# claude-vm base image provisioning (flavor: $flavor)
 
-# Set hostname
 hostname: claude-vm
 
-# Create claude user with sudo
 users:
   - name: claude
     shell: /bin/bash
@@ -39,20 +57,8 @@ users:
     ssh_authorized_keys:
       - $pub_key
 
-# Install essential packages (minimal set for speed)
-packages:
-  - openssh-server
-  - git
-  - curl
-  - wget
-  - build-essential
-  - python3
-  - python3-pip
-  - jq
-  - tmux
-  - vim
+$packages_block
 
-# Configure SSH for fast access
 write_files:
   - path: /etc/ssh/sshd_config.d/claude-vm.conf
     content: |
@@ -61,14 +67,14 @@ write_files:
       PubkeyAuthentication yes
       UseDNS no
       GSSAPIAuthentication no
-      # Speed up SSH connection
+      MaxSessions 64
+      MaxStartups 64:30:128
       AcceptEnv LANG LC_*
     permissions: '0644'
   - path: /home/claude/.bashrc
     content: |
       export PATH="\$HOME/.local/bin:\$HOME/.npm-global/bin:\$PATH"
       export NPM_CONFIG_PREFIX="\$HOME/.npm-global"
-      # Auto-mount workspace hint
       if [ -d /workspace ]; then
         cd /workspace 2>/dev/null
       fi
@@ -110,40 +116,37 @@ write_files:
       WantedBy=multi-user.target
     permissions: '0644'
 
-# Run commands for provisioning
 runcmd:
-  # Create workspace mount point and add fstab entry
+  # Workspace mount point
   - mkdir -p /workspace
   - grep -q 'virtiofs' /etc/fstab || echo 'workspace /workspace virtiofs defaults,nofail 0 0' >> /etc/fstab
   - chown claude:claude /workspace
   # Fix ownership of deferred write_files
   - chown -R claude:claude /home/claude/.bashrc /home/claude/.ssh
-  # Create npm global dir
+  # npm global dir
   - sudo -u claude mkdir -p /home/claude/.npm-global
-  # Install Node.js via nodesource (LTS)
-  - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-  - apt-get install -y nodejs
-  # Install Claude Code globally
+  # Install Node.js (flavor-specific)
+$nodejs_runcmd
+  # Install GitHub CLI (flavor-specific)
+$gh_runcmd
+  # Install Claude Code
   - sudo -u claude npm config set prefix '/home/claude/.npm-global'
   - sudo -u claude npm install -g @anthropic-ai/claude-code
-  # Enable virtiofs workspace mount (systemd unit is more reliable than fstab)
+  # Enable virtiofs workspace mount
   - systemctl daemon-reload
   - systemctl enable workspace.mount
   - systemctl enable workspace-chown.service
-  # Try to mount now if virtiofs device is available (during base build it won't be)
   - systemctl start workspace.mount || true
   - systemctl start workspace-chown.service || true
-  # Generate SSH host keys if missing
+  # SSH
   - ssh-keygen -A
-  - systemctl enable ssh
-  - systemctl start ssh
-  # Signal that provisioning is complete
+  - systemctl enable $ssh_service
+  - systemctl start $ssh_service
+  # Done
   - touch /var/lib/cloud/instance/claude-vm-ready
-  # Clean up apt cache to save space
-  - apt-get clean
-  - rm -rf /var/lib/apt/lists/*
+  # Cleanup (flavor-specific)
+$cleanup_runcmd
 
-# Power off after provisioning (for base image creation)
 power_state:
   mode: poweroff
   message: "claude-vm base image provisioning complete"
@@ -151,6 +154,151 @@ power_state:
   condition: true
 
 USERDATA
+}
+
+# ── Flavor-specific helpers ──────────────────────────────────────────────────
+
+_cloud_init_packages() {
+    local flavor="$1"
+    case "$flavor" in
+        debian)
+            cat << 'PKG'
+packages:
+  # Core (Claude Code depends on these)
+  - openssh-server
+  - git
+  - curl
+  - wget
+  - jq
+  - ripgrep
+  # Build tools (native npm modules, compilation)
+  - build-essential
+  - cmake
+  # Runtimes
+  - python3
+  - python3-pip
+  - python3-venv
+  # Tools Claude reaches for in bash
+  - xxd
+  - file
+  - sqlite3
+  - bc
+  - strace
+  - lsof
+  - dnsutils
+  - netcat-openbsd
+  - iputils-ping
+  - socat
+  - patch
+  # Utilities
+  - tmux
+  - vim-tiny
+  - tree
+  - unzip
+  - rsync
+  - ca-certificates
+  - gnupg
+PKG
+            ;;
+        ubuntu)
+            cat << 'PKG'
+packages:
+  # Core (Claude Code depends on these)
+  - openssh-server
+  - git
+  - curl
+  - wget
+  - jq
+  - ripgrep
+  # Build tools (native npm modules, compilation)
+  - build-essential
+  - cmake
+  # Runtimes
+  - python3
+  - python3-pip
+  - python3-venv
+  # Tools Claude reaches for in bash
+  - xxd
+  - file
+  - sqlite3
+  - bc
+  - strace
+  - lsof
+  - dnsutils
+  - netcat-openbsd
+  - iputils-ping
+  - socat
+  - patch
+  # Utilities
+  - tmux
+  - vim
+  - tree
+  - unzip
+  - rsync
+  - ca-certificates
+  - gnupg
+PKG
+            ;;
+    esac
+}
+
+_cloud_init_nodejs_runcmd() {
+    local flavor="$1"
+    case "$flavor" in
+        debian|ubuntu)
+            cat << 'CMD'
+  - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+  - apt-get install -y nodejs
+CMD
+            ;;
+    esac
+}
+
+_cloud_init_gh_runcmd() {
+    local flavor="$1"
+    case "$flavor" in
+        debian|ubuntu)
+            cat << 'CMD'
+  # GitHub CLI (used by Claude Code for PR/issue operations)
+  - mkdir -p -m 755 /etc/apt/keyrings
+  - curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg
+  - chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+  - echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
+  - apt-get update
+  - apt-get install -y gh
+CMD
+            ;;
+    esac
+}
+
+_cloud_init_cleanup_runcmd() {
+    local flavor="$1"
+    case "$flavor" in
+        debian)
+            cat << 'CMD'
+  - apt-get clean
+  - rm -rf /var/lib/apt/lists/*
+  - journalctl --vacuum-size=8M || true
+CMD
+            ;;
+        ubuntu)
+            cat << 'CMD'
+  - apt-get purge -y --auto-remove snapd || true
+  - rm -rf /var/cache/snapd /snap
+  - apt-get clean
+  - rm -rf /var/lib/apt/lists/*
+  - journalctl --vacuum-size=8M || true
+CMD
+            ;;
+    esac
+}
+
+_cloud_init_ssh_service() {
+    local flavor="$1"
+    case "$flavor" in
+        debian) echo "ssh" ;;
+        ubuntu) echo "ssh" ;;
+    esac
 }
 
 # Generate cloud-init meta-data

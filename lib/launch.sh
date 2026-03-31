@@ -8,6 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/config.sh"
 source "$SCRIPT_DIR/virtiofs.sh"
 source "$SCRIPT_DIR/shutdown.sh"
+source "$SCRIPT_DIR/ui.sh"
 
 # Build SSH command array for connecting to VM
 # Args: $1 = SSH port
@@ -160,30 +161,30 @@ launch_vm() {
     base_img="$(base_image_path)"
     run_dir="$(project_run_dir "$project_dir")"
 
-    # Check if VM is already running — connect to it
+    # Check if VM is already running — attach another Claude Code instance
     if is_vm_running "$project_dir"; then
-        connect_vm "$(get_project_ssh_port "$project_dir")"
+        local ssh_port
+        ssh_port="$(get_project_ssh_port "$project_dir")"
+        ui_info "Attaching to running VM..."
+        connect_vm "$ssh_port"
     fi
+
+    # Initialize UI logging
+    mkdir -p "$run_dir"
+    ui_init "$run_dir/launch.log"
 
     # Build base image if needed
     if [[ ! -f "$base_img" ]]; then
-        echo "No base image found. Building one first..."
-        echo ""
+        ui_warn "No base image found — building one first (this takes ~90s)"
         source "$SCRIPT_DIR/build.sh"
-        build_base_image
-        echo ""
+        ui_phase "Building base image" build_base_image
     fi
 
     # Create project snapshot if needed
     if [[ ! -f "$snap_path" ]]; then
-        echo "Creating project snapshot..."
         source "$SCRIPT_DIR/build.sh"
-        create_project_snapshot "$project_dir"
-        echo ""
+        ui_phase "Creating project snapshot" create_project_snapshot "$project_dir"
     fi
-
-    # Setup run directory
-    mkdir -p "$run_dir"
 
     # Find available SSH port
     local ssh_port
@@ -193,79 +194,56 @@ launch_vm() {
     # Determine acceleration
     local accel="kvm"
     if [[ ! -r /dev/kvm ]] || [[ ! -w /dev/kvm ]]; then
-        echo "WARNING: KVM not accessible, falling back to TCG (slower)"
+        ui_warn "KVM not accessible — falling back to TCG (slower)"
         accel="tcg"
     fi
 
     # Setup virtiofs socket path
     local virtiofs_sock="$run_dir/virtiofs.sock"
 
-    # Start virtiofsd for sharing project directory
-    echo "Starting virtiofs daemon for $project_dir..."
-    start_virtiofsd "$project_dir" "$virtiofs_sock" "$run_dir"
+    # Start virtiofsd
+    ui_phase "Setting up filesystem sharing" start_virtiofsd "$project_dir" "$virtiofs_sock" "$run_dir"
 
-    # Build QEMU command
-    echo "Launching VM..."
-    echo "  RAM: $VM_RAM | CPUs: $VM_CPUS | SSH port: $ssh_port"
+    # Build and launch QEMU
+    _launch_qemu() {
+        local qemu_args=(
+            -name "claude-vm-$(project_hash "$project_dir")"
+            -machine "type=q35,accel=$accel"
+            -cpu host
+            -smp "$VM_CPUS"
+            -m "$VM_RAM"
+            -object "memory-backend-memfd,id=mem,size=$VM_RAM,share=on"
+            -numa "node,memdev=mem"
+            -drive "file=$snap_path,format=qcow2,if=virtio,cache=writeback"
+            -netdev "user,id=net0,hostfwd=tcp::${ssh_port}-:22"
+            -device "virtio-net-pci,netdev=net0"
+            -chardev "socket,id=vhost-fs,path=$virtiofs_sock"
+            -device "vhost-user-fs-pci,chardev=vhost-fs,tag=workspace,queue-size=1024"
+            -display none
+            -serial "file:$run_dir/serial.log"
+            -monitor "unix:$run_dir/monitor.sock,server,nowait"
+            -pidfile "$run_dir/qemu.pid"
+            -daemonize
+        )
+        qemu-system-x86_64 "${qemu_args[@]}"
+    }
+    ui_phase "Starting VM" _launch_qemu
 
-    local qemu_args=(
-        -name "claude-vm-$(project_hash "$project_dir")"
-        -machine "type=q35,accel=$accel"
-        -cpu host
-        -smp "$VM_CPUS"
-        -m "$VM_RAM"
-
-        # Memory backend for virtiofs (requires shared memory)
-        -object "memory-backend-memfd,id=mem,size=$VM_RAM,share=on"
-        -numa "node,memdev=mem"
-
-        # Project snapshot disk
-        -drive "file=$snap_path,format=qcow2,if=virtio,cache=writeback"
-
-        # Network with SSH port forward
-        -netdev "user,id=net0,hostfwd=tcp::${ssh_port}-:22"
-        -device "virtio-net-pci,netdev=net0"
-
-        # Virtiofs for project directory
-        -chardev "socket,id=vhost-fs,path=$virtiofs_sock"
-        -device "vhost-user-fs-pci,chardev=vhost-fs,tag=workspace,queue-size=1024"
-
-        # No graphics — use -display none (compatible with -daemonize)
-        -display none
-        -serial "file:$run_dir/serial.log"
-        -monitor "unix:$run_dir/monitor.sock,server,nowait"
-
-        # PID file
-        -pidfile "$run_dir/qemu.pid"
-
-        # Daemonize
-        -daemonize
-    )
-
-    qemu-system-x86_64 "${qemu_args[@]}"
-
-    echo "  VM started (PID: $(cat "$run_dir/qemu.pid"))"
-
-    # Wait for SSH to become available
+    # Wait for SSH
     local ssh_key
     ssh_key="$(_ssh_key_path)"
-    echo "  Waiting for SSH..."
-    wait_for_ssh "$ssh_port" 60 "$ssh_key"
+    ui_phase "Waiting for VM to boot" wait_for_ssh "$ssh_port" 60 "$ssh_key"
 
-    # Ensure virtiofs workspace is mounted in guest
-    echo "  Verifying virtiofs mount..."
-    virtiofs_ensure_mounted "$ssh_port" "$ssh_key" "claude"
+    # Verify virtiofs mount
+    ui_phase "Mounting workspace" virtiofs_ensure_mounted "$ssh_port" "$ssh_key" "claude"
 
-    # Sync Claude Code config (CLAUDE.md, credentials, plugins)
-    sync_claude_config_to_vm "$ssh_port"
+    # Sync Claude Code config
+    ui_phase "Syncing config" sync_claude_config_to_vm "$ssh_port"
 
     local elapsed=$(( $(date +%s) - start_time ))
-    echo ""
-    echo "==> VM ready in ${elapsed}s"
-    echo "    Project: $project_dir → /workspace (virtiofs)"
-    echo ""
+    ui_done "Ready in ${elapsed}s — $(basename "$project_dir")"
 
-    # Drop into the VM shell
+    # Drop into Claude Code
     connect_vm "$ssh_port"
 }
 

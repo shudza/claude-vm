@@ -17,6 +17,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/ui.sh"
 
 # Timeout constants
 ACPI_SHUTDOWN_TIMEOUT=15     # seconds to wait for ACPI shutdown
@@ -67,8 +68,6 @@ try_save_vm_state() {
         return 1
     fi
 
-    echo "  Saving VM state for fast resume..."
-
     local output
     output=$(_qmp_command "$qmp_sock" \
         '{"execute": "human-monitor-command", "arguments": {"command-line": "savevm '"$VM_STATE_TAG"'"}}' \
@@ -76,8 +75,6 @@ try_save_vm_state() {
 
     # Wait for savevm to complete (it writes to the qcow2)
     sleep "$SAVEVM_TIMEOUT"
-
-    echo "  VM state saved."
     return 0
 }
 
@@ -114,7 +111,7 @@ shutdown_vm() {
 
     # Check if VM is actually running
     if [[ ! -f "$pid_file" ]]; then
-        echo "No VM running for this project."
+        ui_info "No VM running for this project."
         return 0
     fi
 
@@ -122,75 +119,71 @@ shutdown_vm() {
     qemu_pid=$(cat "$pid_file" 2>/dev/null) || true
 
     if [[ -z "$qemu_pid" ]] || ! kill -0 "$qemu_pid" 2>/dev/null; then
-        echo "No VM running (stale PID file)."
+        ui_info "No VM running (stale PID file)."
         _cleanup_runtime "$run_dir"
         return 0
     fi
 
-    echo "Shutting down VM (PID: $qemu_pid)..."
+    # Initialize UI logging
+    ui_init "$run_dir/shutdown.log"
 
-    # Step 1: Try to save VM state for fast resume (best effort)
-    try_save_vm_state "$run_dir" 2>/dev/null || true
+    # Step 1: Save VM state for fast resume (best effort)
+    ui_phase "Saving VM state" try_save_vm_state "$run_dir" || true
 
-    # Step 2: Request graceful ACPI shutdown
-    local shutdown_sent=false
+    # Step 2+3+4: Graceful shutdown with fallback to force kill
+    _do_shutdown() {
+        local shutdown_sent=false
 
-    # Try QMP quit (cleaner than ACPI as QEMU flushes all blocks)
-    if [[ -S "$qmp_sock" ]]; then
-        echo "  Requesting shutdown via QMP..."
-        _qmp_command "$qmp_sock" '{"execute": "quit"}' &>/dev/null && shutdown_sent=true
-    fi
-
-    # Fall back to HMP system_powerdown
-    if ! $shutdown_sent && [[ -S "$monitor_sock" ]]; then
-        echo "  Requesting ACPI shutdown via monitor..."
-        _hmp_command "$monitor_sock" "system_powerdown"
-        shutdown_sent=true
-    fi
-
-    # Step 3: Wait for QEMU to exit gracefully
-    if $shutdown_sent; then
-        local waited=0
-        while kill -0 "$qemu_pid" 2>/dev/null && (( waited < ACPI_SHUTDOWN_TIMEOUT )); do
-            sleep 1
-            (( waited++ ))
-        done
-    fi
-
-    # Step 4: Force kill if still alive
-    if kill -0 "$qemu_pid" 2>/dev/null; then
-        echo "  Graceful shutdown timed out. Sending SIGTERM..."
-        kill "$qemu_pid" 2>/dev/null || true
-        sleep "$FORCE_KILL_GRACE"
-
-        if kill -0 "$qemu_pid" 2>/dev/null; then
-            echo "  Sending SIGKILL..."
-            kill -9 "$qemu_pid" 2>/dev/null || true
-            sleep 1
+        # Try QMP quit (cleaner — QEMU flushes all blocks)
+        if [[ -S "$qmp_sock" ]]; then
+            _qmp_command "$qmp_sock" '{"execute": "quit"}' &>/dev/null && shutdown_sent=true
         fi
-    fi
+
+        # Fall back to HMP system_powerdown
+        if ! $shutdown_sent && [[ -S "$monitor_sock" ]]; then
+            _hmp_command "$monitor_sock" "system_powerdown"
+            shutdown_sent=true
+        fi
+
+        # Wait for QEMU to exit gracefully
+        if $shutdown_sent; then
+            local waited=0
+            while kill -0 "$qemu_pid" 2>/dev/null && (( waited < ACPI_SHUTDOWN_TIMEOUT )); do
+                sleep 1
+                (( waited++ ))
+            done
+        fi
+
+        # Force kill if still alive
+        if kill -0 "$qemu_pid" 2>/dev/null; then
+            kill "$qemu_pid" 2>/dev/null || true
+            sleep "$FORCE_KILL_GRACE"
+            if kill -0 "$qemu_pid" 2>/dev/null; then
+                kill -9 "$qemu_pid" 2>/dev/null || true
+                sleep 1
+            fi
+        fi
+    }
+    ui_phase "Stopping VM" _do_shutdown
 
     # Step 5: Stop virtiofsd
-    _stop_virtiofsd "$run_dir"
+    ui_phase "Stopping filesystem sharing" _stop_virtiofsd "$run_dir"
 
     # Step 6: Verify snapshot integrity
     if [[ -f "$snap_path" ]]; then
         local snap_size
         snap_size=$(stat -c%s "$snap_path" 2>/dev/null || echo 0)
-        if (( snap_size > 0 )); then
-            echo "  Snapshot preserved: $snap_path ($(numfmt --to=iec "$snap_size" 2>/dev/null || echo "${snap_size}B"))"
-        else
-            echo "  WARNING: Snapshot file exists but is empty: $snap_path" >&2
+        if (( snap_size == 0 )); then
+            ui_warn "Snapshot file is empty: $snap_path"
         fi
     else
-        echo "  WARNING: Snapshot file not found after shutdown: $snap_path" >&2
-        echo "  This may indicate a problem. Run 'claude-vm reset' to recreate." >&2
+        ui_warn "Snapshot not found after shutdown — run 'claude-vm reset' to recreate"
     fi
 
     # Step 7: Clean up runtime artifacts only (NOT the snapshot)
     _cleanup_runtime "$run_dir"
 
-    echo "VM stopped. Snapshot preserved on disk."
+    ui_done "Stopped"
     return 0
 }
 
