@@ -19,10 +19,10 @@ usage() {
 claude-vm — QEMU sandbox for Claude Code
 
 Usage:
-  claude-vm                     Launch/resume sandbox for current project
+  claude-vm                     Launch sandbox and enter Claude Code
   claude-vm build [--force]     Build (or rebuild) the base image
   claude-vm launch [DIR]        Launch sandbox for a specific directory
-  claude-vm ssh                 SSH into the running sandbox
+  claude-vm ssh                 SSH shell into the running sandbox
   claude-vm stop                Stop the running sandbox (preserves snapshot)
   claude-vm reset               Reset project snapshot (fresh from base)
   claude-vm destroy             Remove all sandbox artifacts for this project
@@ -180,7 +180,7 @@ cmd_ssh() {
         return 1
     fi
 
-    connect_vm "$(get_project_ssh_port "$project_dir")"
+    connect_vm_shell "$(get_project_ssh_port "$project_dir")"
 }
 
 # Stop command

@@ -9,21 +9,91 @@ source "$SCRIPT_DIR/config.sh"
 source "$SCRIPT_DIR/virtiofs.sh"
 source "$SCRIPT_DIR/shutdown.sh"
 
-# Connect to a running VM via SSH (exec replaces current process)
+# Build SSH command array for connecting to VM
 # Args: $1 = SSH port
-connect_vm() {
+# Sets: _ssh_cmd array (caller uses it)
+_build_ssh_cmd() {
     local port="$1"
     local ssh_key="$CLAUDE_VM_DIR/keys/id_ed25519"
-    local key_opt=()
+    _ssh_cmd=(ssh)
     if [[ -f "$ssh_key" ]]; then
-        key_opt=(-i "$ssh_key")
+        _ssh_cmd+=(-i "$ssh_key")
     fi
-    exec ssh "${key_opt[@]}" \
-        -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null \
-        -o LogLevel=ERROR \
-        -p "$port" \
+    _ssh_cmd+=(
+        -o StrictHostKeyChecking=no
+        -o UserKnownHostsFile=/dev/null
+        -o LogLevel=ERROR
+        -p "$port"
         claude@localhost
+    )
+}
+
+# Connect to a running VM — launches Claude Code by default
+# Args: $1 = SSH port, $2 = command (optional, default: claude code)
+connect_vm() {
+    local port="$1"
+    shift
+    _build_ssh_cmd "$port"
+    if [[ $# -gt 0 ]]; then
+        exec "${_ssh_cmd[@]}" "$@"
+    else
+        # Launch Claude Code with full sandbox permissions
+        exec "${_ssh_cmd[@]}" -t \
+            "cd /workspace 2>/dev/null; [ -f ~/.env ] && . ~/.env; exec /home/claude/.npm-global/bin/claude --dangerously-skip-permissions"
+    fi
+}
+
+# Connect to a running VM shell (no Claude Code)
+# Args: $1 = SSH port
+connect_vm_shell() {
+    local port="$1"
+    _build_ssh_cmd "$port"
+    exec "${_ssh_cmd[@]}"
+}
+
+# Sync host Claude Code config into the guest VM
+# Syncs: CLAUDE.md, credentials, plugins (source + cache)
+# Skips: settings.json (host-specific paths), session state, telemetry
+sync_claude_config_to_vm() {
+    local port="$1"
+    local host_claude_dir="${HOME}/.claude"
+
+    if [[ ! -d "$host_claude_dir" ]]; then
+        return 0
+    fi
+
+    _build_ssh_cmd "$port"
+    local ssh_cmd=("${_ssh_cmd[@]}")  # copy before exec overwrites
+
+    echo "  Syncing Claude Code config to VM..."
+
+    # Use tar over SSH — no rsync needed on guest
+    tar -C "$host_claude_dir" -cf - \
+        --exclude='settings.local.json' \
+        --exclude='todos' \
+        --exclude='shell-snapshots' \
+        --exclude='telemetry' \
+        --exclude='projects' \
+        --exclude='file-history' \
+        --exclude='plans' \
+        --exclude='cache' \
+        --exclude='sessions' \
+        --exclude='backups' \
+        --exclude='session-env' \
+        --exclude='history.jsonl' \
+        --exclude='paste-cache' \
+        --exclude='debug' \
+        --exclude='stats-cache.json' \
+        --exclude='tasks' \
+        . 2>/dev/null | \
+    "${ssh_cmd[@]}" "mkdir -p ~/.claude && tar -C ~/.claude -xf -" 2>/dev/null
+
+    # Sync ~/.claude.json (theme, onboarding state) to skip welcome wizard
+    if [[ -f "$HOME/.claude.json" ]]; then
+        cat "$HOME/.claude.json" | "${ssh_cmd[@]}" "cat > ~/.claude.json" 2>/dev/null
+    else
+        "${ssh_cmd[@]}" 'echo "{\"hasCompletedOnboarding\":true}" > ~/.claude.json' 2>/dev/null
+    fi
 }
 
 # SSH key path for this install
@@ -185,6 +255,9 @@ launch_vm() {
     # Ensure virtiofs workspace is mounted in guest
     echo "  Verifying virtiofs mount..."
     virtiofs_ensure_mounted "$ssh_port" "$ssh_key" "claude"
+
+    # Sync Claude Code config (CLAUDE.md, credentials, plugins)
+    sync_claude_config_to_vm "$ssh_port"
 
     local elapsed=$(( $(date +%s) - start_time ))
     echo ""
