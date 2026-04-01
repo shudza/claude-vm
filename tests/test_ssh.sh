@@ -11,13 +11,10 @@ TESTS_RUN=0
 TESTS_PASSED=0
 TESTS_FAILED=0
 
-pass() { TESTS_PASSED=$((TESTS_PASSED + 1)); echo "  ✓ $1"; }
-fail() { TESTS_FAILED=$((TESTS_FAILED + 1)); echo "  ✗ $1: $2"; }
+pass() { TESTS_PASSED=$((TESTS_PASSED + 1)); TESTS_RUN=$((TESTS_RUN + 1)); echo "  ✓ $1"; }
+fail() { TESTS_FAILED=$((TESTS_FAILED + 1)); TESTS_RUN=$((TESTS_RUN + 1)); echo "  ✗ $1: $2"; }
 
-run_test() {
-    TESTS_RUN=$((TESTS_RUN + 1))
-    "$@"
-}
+run_test() { "$@"; }
 
 # ─── Setup ────────────────────────────────────────────────────────────────────
 

@@ -96,16 +96,37 @@ docs/
 ## Running Tests
 
 ```bash
-# Run all tests
-for t in tests/test_*.sh; do bash "$t"; done
+# Run all tests (unit + e2e)
+make test
+
+# Unit tests only (no QEMU/KVM required)
+make test-unit
+
+# E2E tests only (requires KVM + nested virtualization)
+make test-e2e
 
 # Run a specific test
 bash tests/test_config.sh
-
-# Tests that require QEMU (integration)
-bash tests/test_snapshot_isolation.sh
-bash tests/test_ssh_integration.sh
 ```
+
+### Unit tests
+
+Unit tests (`tests/test_*.sh`, excluding `test_e2e.sh`) mock QEMU and virtiofsd with fake processes. They run anywhere — no KVM, no network, no root. Some tests (`test_snapshot_isolation.sh`) need `qemu-img` and skip gracefully without it.
+
+### E2E tests
+
+`tests/test_e2e.sh` exercises the full CLI workflow — `claude-vm build`, `launch`, `stop`, `reset`, `destroy` — against real QEMU VMs with virtiofs.
+
+**Requirements:** A KVM-capable Linux host with nested virtualization. The test VM spawns its own nested QEMU VMs. Required tools: `qemu-system-x86_64`, `qemu-img`, `virtiofsd`, an ISO tool (`genisoimage`/`mkisofs`/`xorrisofs`), `curl`, `socat`, `rsync`, `jq`, `ssh`. If any prerequisite is missing, the suite skips (exit 0).
+
+**Recommended way to run:** Inside a claude-vm instance, which already has all deps and nested KVM:
+
+```bash
+claude-vm launch /path/to/claude-vm   # SSH into test VM
+cd /workspace && make test-e2e         # run inside the VM
+```
+
+The E2E suite runs in ~2-3 minutes. It creates a temporary `CLAUDE_VM_DIR` under `/tmp`, builds a base image once, then tests the full lifecycle across two project VMs. All artifacts are cleaned up on exit.
 
 ## Commit Messages
 

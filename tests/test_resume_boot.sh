@@ -189,7 +189,7 @@ test_build_base_qemu_args() {
 
     # Verify key arguments are present
     local checks_ok=true
-    for expected in "-enable-kvm" "-cpu" "host" "-smp" "2" "-m" "4G" "-daemonize" "-nographic" "io_uring"; do
+    for expected in "-enable-kvm" "-cpu" "host" "-smp" "2" "-m" "4G" "-daemonize" "-nographic" "discard=unmap"; do
         if ! echo "$args" | grep -qF -- "$expected"; then
             fail "build_base_qemu_args contains '$expected'" "not found in output"
             checks_ok=false
