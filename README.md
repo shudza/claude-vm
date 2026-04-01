@@ -82,7 +82,7 @@ First run builds a base image (~90s), creates a project snapshot, and launches t
 | `claude-vm` | Launch sandbox and enter Claude Code |
 | `claude-vm build [--flavor X]` | Build (or rebuild) the base image |
 | `claude-vm ssh` | Shell into the running VM |
-| `claude-vm stop` | Stop the VM (preserves snapshot) |
+| `claude-vm stop [--all]` | Stop the VM (preserves snapshot) |
 | `claude-vm reset` | Reset project snapshot to fresh state |
 | `claude-vm destroy` | Remove all artifacts for this project |
 | `claude-vm list` | List all project snapshots |

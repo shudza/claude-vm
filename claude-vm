@@ -34,6 +34,7 @@ Usage:
   claude-vm launch [DIR]        Launch sandbox for a specific directory
   claude-vm ssh                 SSH shell into the running sandbox
   claude-vm stop                Stop the running sandbox (preserves snapshot)
+  claude-vm stop --all          Stop all running sandboxes
   claude-vm reset               Reset project snapshot (fresh from base)
   claude-vm destroy             Remove all sandbox artifacts for this project
   claude-vm destroy --all       Remove ALL claude-vm data (base + all snapshots)
@@ -224,7 +225,59 @@ cmd_ssh() {
 
 # Stop command
 cmd_stop() {
-    stop_vm "${1:-$PWD}"
+    local all=false
+    local project_dir="$PWD"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --all)
+                all=true
+                shift
+                ;;
+            *)
+                project_dir="$1"
+                shift
+                ;;
+        esac
+    done
+
+    load_config
+
+    if $all; then
+        if [[ ! -d "$RUN_DIR" ]]; then
+            echo "No running VMs."
+            return 0
+        fi
+
+        local stopped=0
+        for run_subdir in "$RUN_DIR"/*/; do
+            [[ -d "$run_subdir" ]] || continue
+            local pid_file="${run_subdir}qemu.pid"
+            [[ -f "$pid_file" ]] || continue
+            local pid
+            pid=$(cat "$pid_file" 2>/dev/null) || continue
+            kill -0 "$pid" 2>/dev/null || continue
+
+            # Recover project dir from hash
+            local hash
+            hash=$(basename "$run_subdir")
+            local project_file="$SNAPSHOTS_DIR/${hash}.project"
+            local label="$hash"
+            [[ -f "$project_file" ]] && label="$(cat "$project_file")"
+
+            echo "Stopping: $label"
+            stop_vm_by_run_dir "$run_subdir" || true
+            (( ++stopped ))
+        done
+
+        if (( stopped == 0 )); then
+            echo "No running VMs."
+        else
+            echo "Stopped $stopped VM(s)."
+        fi
+    else
+        stop_vm "$project_dir"
+    fi
 }
 
 # Reset command

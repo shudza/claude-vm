@@ -58,8 +58,13 @@ claude-vm ssh
 Stop the VM gracefully. Preserves the project snapshot on disk.
 
 ```bash
-claude-vm stop
+claude-vm stop                    # Stop current project's VM
+claude-vm stop --all              # Stop all running VMs
 ```
+
+| Flag | Description |
+|-|-|
+| `--all` | Stop all running claude-vm instances across all projects |
 
 ### `claude-vm reset`
 

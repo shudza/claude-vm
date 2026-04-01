@@ -187,6 +187,91 @@ shutdown_vm() {
     return 0
 }
 
+# Shut down a VM given its run directory (used by stop --all)
+# Resolves the project dir from the sidecar .project file
+# Args: $1 = run directory path
+stop_vm_by_run_dir() {
+    local run_dir="${1%/}"
+    local hash
+    hash="$(basename "$run_dir")"
+
+    # Source config if not already loaded
+    if [[ -z "${CLAUDE_VM_DIR:-}" ]]; then
+        source "$SCRIPT_DIR/config.sh"
+        load_config
+    fi
+
+    local project_file="$SNAPSHOTS_DIR/${hash}.project"
+    if [[ -f "$project_file" ]]; then
+        local project_dir
+        project_dir="$(cat "$project_file")"
+        shutdown_vm "$project_dir"
+    else
+        # No sidecar — fall back to direct shutdown using the run dir
+        # This handles orphaned run dirs where the .project file is missing
+        shutdown_vm_from_run_dir "$run_dir" "$hash"
+    fi
+}
+
+# Direct shutdown when we only have a run directory (no project dir)
+# Stripped-down version of shutdown_vm for the orphaned case
+# Args: $1 = run directory, $2 = hash
+shutdown_vm_from_run_dir() {
+    local run_dir="$1"
+    local hash="$2"
+    local snap_path="$SNAPSHOTS_DIR/${hash}.qcow2"
+
+    local pid_file="$run_dir/qemu.pid"
+    local monitor_sock="$run_dir/monitor.sock"
+    local qmp_sock="$run_dir/qmp.sock"
+
+    if [[ ! -f "$pid_file" ]]; then
+        return 0
+    fi
+
+    local qemu_pid
+    qemu_pid=$(cat "$pid_file" 2>/dev/null) || true
+
+    if [[ -z "$qemu_pid" ]] || ! kill -0 "$qemu_pid" 2>/dev/null; then
+        _cleanup_runtime "$run_dir"
+        return 0
+    fi
+
+    ui_init "$run_dir/shutdown.log"
+
+    ui_phase "Saving VM state" try_save_vm_state "$run_dir" || true
+
+    _do_shutdown() {
+        local shutdown_sent=false
+        if [[ -S "$qmp_sock" ]]; then
+            _qmp_command "$qmp_sock" '{"execute": "quit"}' &>/dev/null && shutdown_sent=true
+        fi
+        if ! $shutdown_sent && [[ -S "$monitor_sock" ]]; then
+            _hmp_command "$monitor_sock" "system_powerdown"
+            shutdown_sent=true
+        fi
+        if $shutdown_sent; then
+            local waited=0
+            while kill -0 "$qemu_pid" 2>/dev/null && (( waited < ACPI_SHUTDOWN_TIMEOUT )); do
+                sleep 1
+                (( waited++ ))
+            done
+        fi
+        if kill -0 "$qemu_pid" 2>/dev/null; then
+            kill "$qemu_pid" 2>/dev/null || true
+            sleep "$FORCE_KILL_GRACE"
+            if kill -0 "$qemu_pid" 2>/dev/null; then
+                kill -9 "$qemu_pid" 2>/dev/null || true
+                sleep 1
+            fi
+        fi
+    }
+    ui_phase "Stopping VM" _do_shutdown
+    ui_phase "Stopping filesystem sharing" _stop_virtiofsd "$run_dir"
+    _cleanup_runtime "$run_dir"
+    ui_done "Stopped"
+}
+
 # Stop the virtiofsd daemon for a project
 # Args: $1 = run directory
 _stop_virtiofsd() {
