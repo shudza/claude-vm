@@ -190,7 +190,7 @@ defaults < config file < environment variables
 
 | Flavor | Image | Notes |
 |-|-|-|
-| `debian` (default) | Debian 12 genericcloud | Minimal, no snapd |
+| `debian` (default) | Debian 12 genericcloud | Minimal |
 | `ubuntu` | Ubuntu 24.04 minimal | snapd auto-removed during provisioning |
 
 Both flavors install the same tool set. Debian uses `vim-tiny` instead of full `vim`.

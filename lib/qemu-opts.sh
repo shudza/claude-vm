@@ -43,7 +43,7 @@ build_base_qemu_args() {
         -m "$ram"
 
         # Drive: virtio for best I/O, writeback cache for speed
-        -drive "file=${snapshot},format=qcow2,if=virtio,cache=writeback,aio=io_uring"
+        -drive "file=${snapshot},format=qcow2,if=virtio,cache=writeback,discard=unmap,detect-zeroes=unmap"
 
         # Network: user-mode with SSH port forward (fast, no bridge setup)
         -netdev "user,id=net0,hostfwd=tcp::${ssh_port}-:22"

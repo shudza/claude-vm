@@ -162,7 +162,7 @@ provision_base_image() {
         -cpu host \
         -smp "$VM_CPUS" \
         -m "$VM_RAM" \
-        -drive "file=$build_img,format=qcow2,if=virtio,cache=writeback" \
+        -drive "file=$build_img,format=qcow2,if=virtio,cache=writeback,discard=unmap,detect-zeroes=unmap" \
         -drive "file=$ci_iso,format=raw,if=virtio,media=cdrom,readonly=on" \
         -netdev "user,id=net0" \
         -device "virtio-net-pci,netdev=net0" \

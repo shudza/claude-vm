@@ -258,7 +258,7 @@ launch_vm() {
             -m "$VM_RAM"
             -object "memory-backend-memfd,id=mem,size=$VM_RAM,share=on"
             -numa "node,memdev=mem"
-            -drive "file=$snap_path,format=qcow2,if=virtio,cache=writeback"
+            -drive "file=$snap_path,format=qcow2,if=virtio,cache=writeback,discard=unmap,detect-zeroes=unmap"
             -netdev "user,id=net0,hostfwd=tcp::${ssh_port}-:22"
             -device "virtio-net-pci,netdev=net0"
             -chardev "socket,id=vhost-fs,path=$virtiofs_sock"

@@ -393,7 +393,7 @@ cmd_list() {
 
                 echo "  $project_dir_label"
                 echo "    $hash  $size  [$status_label]"
-                (( count++ ))
+                (( ++count ))
             fi
         done
 

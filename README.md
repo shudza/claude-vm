@@ -130,6 +130,8 @@ claude-vm build --flavor ubuntu
 4. **Config sync** (rsync) copies your Claude Code settings, git identity, and gh auth into the VM
 5. **SSH** connects your terminal to Claude Code running inside the VM
 
+The base image is ~1.5GB. Each project snapshot starts at ~200KB and grows only as the VM writes to its own disk (package installs, caches, etc.). QEMU is configured with `discard=unmap` so that deleted files are reclaimed from the overlay via fstrim, keeping snapshots compact over time. Background services that would silently grow snapshots (unattended-upgrades, apt timers, man-db rebuilds) are disabled during provisioning.
+
 See [docs/architecture.md](docs/architecture.md) for the full design.
 
 ## Pre-installed Tools

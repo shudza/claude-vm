@@ -146,6 +146,10 @@ $gh_runcmd
   - touch /var/lib/cloud/instance/claude-vm-ready
   # Cleanup (flavor-specific)
 $cleanup_runcmd
+  # Disable cloud-init on subsequent boots (provisioning is done)
+  - touch /etc/cloud/cloud-init.disabled
+  # Reclaim freed disk space so the base image qcow2 stays compact
+  - fstrim -av || true
 
 power_state:
   mode: poweroff
@@ -276,6 +280,13 @@ _cloud_init_cleanup_runcmd() {
     case "$flavor" in
         debian)
             cat << 'CMD'
+  # Disable background services that bloat snapshots and waste CPU
+  - systemctl disable --now unattended-upgrades.service || true
+  - systemctl disable --now apt-daily.timer apt-daily-upgrade.timer || true
+  - systemctl disable --now man-db.timer || true
+  - systemctl disable --now e2scrub_all.timer || true
+  - systemctl disable --now dpkg-db-backup.timer || true
+  - apt-get purge -y --auto-remove unattended-upgrades || true
   - apt-get clean
   - rm -rf /var/lib/apt/lists/*
   - journalctl --vacuum-size=8M || true
@@ -285,6 +296,13 @@ CMD
             cat << 'CMD'
   - apt-get purge -y --auto-remove snapd || true
   - rm -rf /var/cache/snapd /snap
+  # Disable background services that bloat snapshots and waste CPU
+  - systemctl disable --now unattended-upgrades.service || true
+  - systemctl disable --now apt-daily.timer apt-daily-upgrade.timer || true
+  - systemctl disable --now man-db.timer || true
+  - systemctl disable --now e2scrub_all.timer || true
+  - systemctl disable --now dpkg-db-backup.timer || true
+  - apt-get purge -y --auto-remove unattended-upgrades || true
   - apt-get clean
   - rm -rf /var/lib/apt/lists/*
   - journalctl --vacuum-size=8M || true
