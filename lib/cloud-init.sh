@@ -73,8 +73,7 @@ write_files:
     permissions: '0644'
   - path: /home/claude/.bashrc
     content: |
-      export PATH="\$HOME/.local/bin:\$HOME/.npm-global/bin:\$PATH"
-      export NPM_CONFIG_PREFIX="\$HOME/.npm-global"
+      export PATH="\$HOME/.local/bin:\$PATH"
       if [ -d /workspace ]; then
         cd /workspace 2>/dev/null
       fi
@@ -123,15 +122,12 @@ runcmd:
   - chown claude:claude /workspace
   # Fix ownership of deferred write_files
   - chown -R claude:claude /home/claude/.bashrc /home/claude/.ssh
-  # npm global dir
-  - sudo -u claude mkdir -p /home/claude/.npm-global
   # Install Node.js (flavor-specific)
 $nodejs_runcmd
   # Install GitHub CLI (flavor-specific)
 $gh_runcmd
-  # Install Claude Code
-  - sudo -u claude npm config set prefix '/home/claude/.npm-global'
-  - sudo -u claude npm install -g @anthropic-ai/claude-code
+  # Install Claude Code (native installer, no npm needed)
+  - sudo -u claude bash -c 'curl -fsSL https://claude.ai/install.sh | bash'
   # Enable virtiofs workspace mount
   - systemctl daemon-reload
   - systemctl enable workspace.mount
