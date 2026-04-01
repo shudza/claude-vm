@@ -2,26 +2,7 @@
 
 QEMU sandbox for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Run Claude Code with full permissions in an isolated VM, with near-native filesystem performance via virtiofs.
 
-```
-$ claude-vm
-  ✓ Setting up filesystem sharing
-  ✓ Starting VM
-  ✓ Waiting for VM to boot
-  ✓ Mounting workspace
-  ✓ Syncing config
-
-  Ready in 12s — my-project
-
-  ┌──────────────────────────────────────────────┐
-  │  Claude Code v2.1.89                         │
-  │  Opus 4.6 (1M context) · Claude Max          │
-  │  /workspace                                  │
-  │                                              │
-  │  ❯ _                                         │
-  │                                              │
-  │  ⏵⏵ bypass permissions on                    │
-  └──────────────────────────────────────────────┘
-```
+![demo](docs/demo.gif)
 
 ## Why
 
