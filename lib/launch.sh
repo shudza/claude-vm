@@ -194,13 +194,32 @@ launch_vm() {
         connect_vm "$ssh_port"
     fi
 
+    # First launch in this directory — explain and confirm
+    if [[ ! -f "$snap_path" ]]; then
+        echo ""
+        echo "  claude-vm will create an isolated QEMU sandbox for this project."
+        echo "  Your project directory is mounted into the VM via virtiofs —"
+        echo "  files are shared, not copied."
+        echo ""
+        echo "  Project: $project_dir"
+        if [[ ! -f "$base_img" ]]; then
+            echo "  Base image will be built first (~90s on first ever run)."
+        fi
+        echo ""
+        read -rp "  Continue? [Y/n] " confirm
+        if [[ "$confirm" == [nN] ]]; then
+            echo "  Cancelled."
+            return 0
+        fi
+        echo ""
+    fi
+
     # Initialize UI logging
     mkdir -p "$run_dir"
     ui_init "$run_dir/launch.log"
 
     # Build base image if needed
     if [[ ! -f "$base_img" ]]; then
-        ui_warn "No base image found — building one first (this takes ~90s)"
         source "$SCRIPT_DIR/build.sh"
         ui_phase "Building base image" build_base_image
     fi
