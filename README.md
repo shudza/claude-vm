@@ -52,7 +52,18 @@ sudo apt install qemu-system-x86 qemu-utils virtiofsd genisoimage curl rsync
 
 ```bash
 git clone https://github.com/anthropics/claude-vm.git
-sudo ln -s "$(pwd)/claude-vm/claude-vm" /usr/local/bin/claude-vm
+cd claude-vm
+sudo make install
+```
+
+This installs `claude-vm` to `/usr/local/bin/` and library scripts to `/usr/local/lib/claude-vm/`. To uninstall: `sudo make uninstall`.
+
+To install elsewhere: `make install PREFIX=/opt/claude-vm`
+
+For development, run directly from the repo (no install needed):
+
+```bash
+./claude-vm
 ```
 
 ## Quick Start
