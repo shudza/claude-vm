@@ -18,15 +18,18 @@ uninstall:
 	rm -rf $(DESTDIR)$(LIBDIR)
 	@echo "Uninstalled claude-vm"
 
-.PHONY: test test-unit test-e2e
+.PHONY: test test-unit test-e2e test-checksum
 
 test: test-unit test-e2e
 
 test-unit:
 	@for t in tests/test_*.sh; do \
-		case "$$(basename $$t)" in test_e2e.sh|test_first_launch_timing.sh) continue;; esac; \
+		case "$$(basename $$t)" in test_e2e.sh|test_first_launch_timing.sh|test_image_checksum.sh) continue;; esac; \
 		echo "--- $$t ---"; bash "$$t" || exit 1; \
 	done
 
 test-e2e:
 	bash tests/test_e2e.sh
+
+test-checksum:
+	bash tests/test_image_checksum.sh

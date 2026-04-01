@@ -34,6 +34,63 @@ download_cloud_image() {
 
     mv "${img_path}.tmp" "$img_path"
     echo "  Download complete: $(du -h "$img_path" | cut -f1)"
+
+    verify_cloud_image "$img_path"
+}
+
+# Verify downloaded cloud image against upstream checksum file
+# Fetches the checksum file from the same mirror and compares
+verify_cloud_image() {
+    local img_path="$1"
+    local checksum_url="${FLAVOR_CHECKSUM_URL[$FLAVOR]:-}"
+    local checksum_type="${FLAVOR_CHECKSUM_TYPE[$FLAVOR]:-}"
+
+    if [[ -z "$checksum_url" || -z "$checksum_type" ]]; then
+        echo "  WARNING: No upstream checksum URL for flavor '$FLAVOR', skipping verification" >&2
+        return 0
+    fi
+
+    echo "  Verifying image integrity ($checksum_type)..."
+
+    # Fetch upstream checksum file
+    local checksums
+    if ! checksums=$(curl -fsSL --retry 2 "$checksum_url" 2>/dev/null); then
+        echo "  WARNING: Could not fetch checksum file: $checksum_url" >&2
+        echo "  Skipping verification (image may still be valid)" >&2
+        return 0
+    fi
+
+    # Extract expected hash for our image filename
+    local img_name
+    img_name="$(basename "$img_path")"
+    local expected_hash
+    expected_hash=$(echo "$checksums" | grep -F "$img_name" | awk '{print $1}')
+
+    if [[ -z "$expected_hash" ]]; then
+        echo "  WARNING: Image '$img_name' not found in upstream checksum file" >&2
+        return 0
+    fi
+
+    # Compute actual hash
+    local actual_hash
+    case "$checksum_type" in
+        sha256) actual_hash=$(sha256sum "$img_path" | awk '{print $1}') ;;
+        sha512) actual_hash=$(sha512sum "$img_path" | awk '{print $1}') ;;
+        *)
+            echo "  WARNING: Unknown checksum type '$checksum_type'" >&2
+            return 0
+            ;;
+    esac
+
+    if [[ "$actual_hash" == "$expected_hash" ]]; then
+        echo "  Checksum verified ($checksum_type)"
+    else
+        echo "ERROR: Checksum mismatch for $img_name" >&2
+        echo "  Expected: $expected_hash" >&2
+        echo "  Actual:   $actual_hash" >&2
+        rm -f "$img_path"
+        return 1
+    fi
 }
 
 # Create the base image from cloud image + cloud-init provisioning

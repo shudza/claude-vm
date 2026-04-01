@@ -33,6 +33,18 @@ declare -A FLAVOR_PKG_FAMILY=(
     [ubuntu]="apt"
 )
 
+# Upstream checksum file URLs (fetched at download time to verify image integrity)
+# Debian publishes SHA512SUMS, Ubuntu publishes SHA256SUMS
+declare -A FLAVOR_CHECKSUM_URL=(
+    [debian]="https://cloud.debian.org/images/cloud/bookworm/latest/SHA512SUMS"
+    [ubuntu]="https://cloud-images.ubuntu.com/minimal/releases/noble/release/SHA256SUMS"
+)
+
+declare -A FLAVOR_CHECKSUM_TYPE=(
+    [debian]="sha512"
+    [ubuntu]="sha256"
+)
+
 # List valid flavor names
 valid_flavors() {
     echo "${!FLAVOR_IMAGE_URL[@]}" | tr ' ' '\n' | sort
