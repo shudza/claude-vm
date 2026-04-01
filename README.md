@@ -37,7 +37,13 @@ sudo apt install qemu-system-x86 qemu-utils virtiofsd genisoimage curl rsync
 ## Install
 
 ```bash
-git clone https://github.com/anthropics/claude-vm.git
+curl -fsSL https://raw.githubusercontent.com/shudza/claude-vm/master/install.sh | bash
+```
+
+### Install from source
+
+```bash
+git clone https://github.com/shudza/claude-vm.git
 cd claude-vm
 sudo make install
 ```
