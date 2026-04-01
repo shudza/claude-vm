@@ -1,46 +1,74 @@
-<!-- ooo:START -->
-<!-- ooo:VERSION:0.26.6 -->
-# Ouroboros — Specification-First AI Development
+# claude-vm
 
-> Before telling AI what to build, define what should be built.
-> As Socrates asked 2,500 years ago — "What do you truly know?"
-> Ouroboros turns that question into an evolutionary AI workflow engine.
+QEMU sandbox for Claude Code. Isolated VMs with virtiofs filesystem sharing
+and QCOW2 linked snapshots for per-project isolation.
 
-Most AI coding fails at the input, not the output. Ouroboros fixes this by
-**exposing hidden assumptions before any code is written**.
+## Architecture
 
-1. **Socratic Clarity** — Question until ambiguity ≤ 0.2
-2. **Ontological Precision** — Solve the root problem, not symptoms
-3. **Evolutionary Loops** — Each evaluation cycle feeds back into better specs
+Host runs `claude-vm` which manages QEMU VMs with virtiofs mounts of `$PWD` → `/workspace`.
 
-```
-Interview → Seed → Execute → Evaluate
-    ↑                           ↓
-    └─── Evolutionary Loop ─────┘
-```
+**Snapshot strategy:**
+- Base image (`~/.claude-vm/base/base.qcow2`): golden image provisioned via cloud-init
+- Linked snapshots (`~/.claude-vm/snapshots/<hash>.qcow2`): COW deltas per project (12-char SHA-256 of abs path)
+- Sidecar metadata (`<hash>.project`): stores project dir path
 
-## ooo Commands
+**Launch flow:** check running → build base if missing → create snapshot if missing →
+find SSH port → start virtiofsd → launch QEMU (daemonized) → wait SSH → verify virtiofs →
+rsync config → exec into Claude Code
 
-Each command loads its agent/MCP on-demand. Details in each skill file.
+**Shutdown flow:** save VM state (QMP savevm) → QMP quit / HMP powerdown → SIGTERM/SIGKILL fallback →
+stop virtiofsd → verify snapshot intact → clean runtime artifacts (never delete snapshot)
 
-| Command | Loads |
+**Config sync (rsync over SSH):** `~/.claude/`, `~/.claude.json`, `~/.gitconfig`, `~/.config/gh/`
+Include-list for `~/.claude/`: settings, credentials, plugins, skills, mcp.json, CLAUDE.md only.
+
+## Module Map
+
+| File | Responsibility |
 |-|-|
-| `ooo` | — |
-| `ooo interview` | `ouroboros:socratic-interviewer` |
-| `ooo seed` | `ouroboros:seed-architect` |
-| `ooo run` | MCP required |
-| `ooo evolve` | MCP: `evolve_step` |
-| `ooo evaluate` | `ouroboros:evaluator` |
-| `ooo unstuck` | `ouroboros:{persona}` |
-| `ooo status` | MCP: `session_status` |
-| `ooo setup` | — |
-| `ooo help` | — |
+| `claude-vm` | CLI entry point, command dispatch |
+| `lib/config.sh` | Config loading, defaults, flavor registry, path helpers |
+| `lib/build.sh` | Base image download, cloud-init provisioning, prereq checks |
+| `lib/cloud-init.sh` | Cloud-init ISO generation, flavor-specific packages/runcmd |
+| `lib/launch.sh` | VM launch, SSH connection, virtiofsd start, config sync |
+| `lib/shutdown.sh` | Graceful shutdown, state save, cleanup |
+| `lib/snapshot.sh` | Linked snapshot CRUD, backing chain verification |
+| `lib/virtiofs.sh` | virtiofsd lifecycle, QEMU args, guest mount verification |
+| `lib/ssh.sh` | SSH key management, connectivity checks, session helpers |
+| `lib/ui.sh` | Spinner, phase execution with log capture, status messages |
+| `lib/resume.sh` | savevm/loadvm for fast resume |
+| `lib/wait-ready.sh` | SSH readiness polling with exponential backoff |
+| `lib/boot-timer.sh` | Boot performance measurement |
+| `lib/claude-code.sh` | Claude Code verification, credential detection/forwarding |
+| `lib/qemu-opts.sh` | QEMU argument builders |
 
-## Agents
+## Conventions
 
-Loaded on-demand — not preloaded.
+- All scripts: `#!/usr/bin/env bash` + `set -euo pipefail`
+- Functions: `snake_case`. Internal/private: `_` prefix (e.g. `_build_ssh_cmd`)
+- Constants: `UPPER_SNAKE_CASE`. Local vars: `local` at top of function
+- Quote all expansions: `"$var"`, `"${array[@]}"`
+- Use `[[ ]]` for conditionals, `(( ))` for arithmetic
+- User-facing output goes through `lib/ui.sh` (`ui_phase`, `ui_info`, `ui_warn`, `ui_error`)
+- Never `echo` directly in launch/shutdown code paths
+- Error messages to stderr (`>&2`). Technical details to log file, not terminal
+- Snapshot file is **never** deleted during shutdown/error. Only `reset`/`destroy` remove snapshots
 
-**Core**: socratic-interviewer, ontologist, seed-architect, evaluator,
-wonder, reflect, advocate, contrarian, judge
-**Support**: hacker, simplifier, researcher, architect
-<!-- ooo:END -->
+**Adding a command:** `cmd_<name>` function in `claude-vm` → case in `main()` → usage line in `usage()`
+
+**Adding a flavor:** entries in `FLAVOR_IMAGE_URL/NAME/PKG_FAMILY` arrays in `config.sh` →
+cases in `_cloud_init_*` functions in `cloud-init.sh`
+
+**Adding a config key:** `DEFAULT_*` constant in `config.sh` → handle in `load_config` →
+validate in `set_config_value` → add to `get` case in `claude-vm`
+
+## Testing
+
+```bash
+make test          # all (unit + e2e)
+make test-unit     # no QEMU/KVM needed
+make test-e2e      # requires KVM + nested virt
+```
+
+Unit tests mock QEMU/virtiofsd with fake processes. E2E tests run real VMs.
+Tests create temp dirs and clean up. Pattern: setup → action → assert → teardown.

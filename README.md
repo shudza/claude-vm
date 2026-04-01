@@ -12,10 +12,15 @@ $ claude-vm
 
   Ready in 12s — my-project
 
-╭──────────────────────────────────────╮
-│ Claude Code                          │
-│ /workspace (virtiofs)                │
-╰──────────────────────────────────────╯
+  ┌──────────────────────────────────────────────┐
+  │  Claude Code v2.1.89                         │
+  │  Opus 4.6 (1M context) · Claude Max          │
+  │  /workspace                                  │
+  │                                              │
+  │  ❯ _                                         │
+  │                                              │
+  │  ⏵⏵ bypass permissions on                    │
+  └──────────────────────────────────────────────┘
 ```
 
 ## Why
@@ -115,7 +120,7 @@ Environment variables override config: `VM_RAM=16G claude-vm`
 
 | Flavor | Base Image | Notes |
 |-|-|-|
-| `debian` (default) | Debian 12 genericcloud | Minimal, no snapd |
+| `debian` (default) | Debian 12 genericcloud | Minimal |
 | `ubuntu` | Ubuntu 24.04 minimal | snapd auto-removed |
 
 ```bash
@@ -185,6 +190,11 @@ claude-vm destroy --all   # Removes base image + all snapshots
 ## Contributing
 
 See [docs/contributing.md](docs/contributing.md) for conventions, project structure, and how to add new commands or flavors.
+
+## Thanks To
+
+- [Ouroboros](https://github.com/Q00/ouroboros) — specification-first AI development workflow
+- [Claude](https://claude.ai) — built with Claude Code
 
 ## License
 

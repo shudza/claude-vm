@@ -75,24 +75,17 @@ sync_claude_config_to_vm() {
     _build_rsync_cmd "$port"
 
     # ── Claude Code config ────────────────────────────────────────────────
+    # Include-list: only sync skills, plugins, auth, and settings
     if [[ -d "$HOME/.claude" ]]; then
         "${_rsync_cmd[@]}" \
-            --exclude='settings.local.json' \
-            --exclude='todos' \
-            --exclude='shell-snapshots' \
-            --exclude='telemetry' \
-            --exclude='projects' \
-            --exclude='file-history' \
-            --exclude='plans' \
-            --exclude='cache' \
-            --exclude='sessions' \
-            --exclude='backups' \
-            --exclude='session-env' \
-            --exclude='history.jsonl' \
-            --exclude='paste-cache' \
-            --exclude='debug' \
-            --exclude='stats-cache.json' \
-            --exclude='tasks' \
+            --include='settings.json' \
+            --include='.credentials.json' \
+            --include='credentials.json' \
+            --include='plugins/***' \
+            --include='skills/***' \
+            --include='mcp.json' \
+            --include='CLAUDE.md' \
+            --exclude='*' \
             "$HOME/.claude/" "claude@localhost:~/.claude/" 2>/dev/null
     fi
 
