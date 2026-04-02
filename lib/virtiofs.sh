@@ -223,7 +223,7 @@ virtiofs_verify_mount() {
     local ssh_port="$1"
     local project_dir="$2"
     local ssh_key="${3:-}"
-    local ssh_user="${4:-claude}"
+    local ssh_user="${4:-${VM_USER:-$USER}}"
 
     local ssh_opts=(
         -p "$ssh_port"
@@ -354,7 +354,7 @@ virtiofs_verify_mount() {
 virtiofs_is_mounted() {
     local ssh_port="$1"
     local ssh_key="${2:-}"
-    local ssh_user="${3:-claude}"
+    local ssh_user="${3:-${VM_USER:-$USER}}"
 
     local ssh_opts=(
         -p "$ssh_port"
@@ -377,7 +377,7 @@ virtiofs_is_mounted() {
 virtiofs_ensure_mounted() {
     local ssh_port="$1"
     local ssh_key="${2:-}"
-    local ssh_user="${3:-claude}"
+    local ssh_user="${3:-${VM_USER:-$USER}}"
 
     local ssh_opts=(
         -p "$ssh_port"

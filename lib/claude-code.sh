@@ -28,9 +28,11 @@ fi
 
 # Guest paths
 GUEST_WORKSPACE="/workspace"
-GUEST_CLAUDE_DIR="/home/claude/.claude"
+GUEST_USER="${VM_USER:-$USER}"
+GUEST_HOME="/home/$GUEST_USER"
+GUEST_CLAUDE_DIR="$GUEST_HOME/.claude"
 GUEST_CLAUDE_BIN_PATHS=(
-    "/home/claude/.local/bin/claude"
+    "$GUEST_HOME/.local/bin/claude"
     "/usr/local/bin/claude"
     "/usr/bin/claude"
 )
@@ -177,7 +179,7 @@ guest_has_claude() {
 
     ssh_exec "$port" "$key" "$user" \
         "command -v claude >/dev/null 2>&1 || \
-         test -x /home/claude/.local/bin/claude" 2>/dev/null
+         test -x $GUEST_HOME/.local/bin/claude" 2>/dev/null
 }
 
 # Get the Claude Code version installed in the guest

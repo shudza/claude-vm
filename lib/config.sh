@@ -13,18 +13,19 @@ DEFAULT_RAM="4G"
 DEFAULT_CPUS="2"
 DEFAULT_SSH_PORT_BASE="10022"
 DEFAULT_FLAVOR="debian"
+DEFAULT_VM_USER="$USER"
 
 # ── Flavor registry ──────────────────────────────────────────────────────────
 # Each flavor defines: image URL, image filename, package manager family
 # Cloud-init userdata generation is dispatched by flavor in cloud-init.sh
 
 declare -A FLAVOR_IMAGE_URL=(
-    [debian]="https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2"
+    [debian]="https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2"
     [ubuntu]="https://cloud-images.ubuntu.com/minimal/releases/noble/release/ubuntu-24.04-minimal-cloudimg-amd64.img"
 )
 
 declare -A FLAVOR_IMAGE_NAME=(
-    [debian]="debian-12-genericcloud-amd64.qcow2"
+    [debian]="debian-13-genericcloud-amd64.qcow2"
     [ubuntu]="ubuntu-24.04-minimal-cloudimg-amd64.img"
 )
 
@@ -36,7 +37,7 @@ declare -A FLAVOR_PKG_FAMILY=(
 # Upstream checksum file URLs (fetched at download time to verify image integrity)
 # Debian publishes SHA512SUMS, Ubuntu publishes SHA256SUMS
 declare -A FLAVOR_CHECKSUM_URL=(
-    [debian]="https://cloud.debian.org/images/cloud/bookworm/latest/SHA512SUMS"
+    [debian]="https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS"
     [ubuntu]="https://cloud-images.ubuntu.com/minimal/releases/noble/release/SHA256SUMS"
 )
 
@@ -71,12 +72,14 @@ load_config() {
     local _env_flavor="${FLAVOR:-}"
     local _env_image_url="${BASE_IMAGE_URL:-}"
     local _env_image_name="${BASE_IMAGE_NAME:-}"
+    local _env_vm_user="${VM_USER:-}"
 
     # Start with defaults
     VM_RAM="$DEFAULT_RAM"
     VM_CPUS="$DEFAULT_CPUS"
     SSH_PORT_BASE="$DEFAULT_SSH_PORT_BASE"
     FLAVOR="$DEFAULT_FLAVOR"
+    VM_USER="$DEFAULT_VM_USER"
 
     # Override from config file if it exists
     if [[ -f "$CLAUDE_VM_CONFIG" ]]; then
@@ -89,6 +92,7 @@ load_config() {
     [[ -n "$_env_cpus" ]] && VM_CPUS="$_env_cpus"
     [[ -n "$_env_ssh_port" ]] && SSH_PORT_BASE="$_env_ssh_port"
     [[ -n "$_env_flavor" ]] && FLAVOR="$_env_flavor"
+    [[ -n "$_env_vm_user" ]] && VM_USER="$_env_vm_user"
 
     # Derive image URL/name from flavor (explicit overrides still win)
     if is_valid_flavor "$FLAVOR"; then
@@ -118,6 +122,7 @@ show_config() {
     fi
     echo ""
     echo "FLAVOR=\"$FLAVOR\""
+    echo "VM_USER=\"$VM_USER\""
     echo "VM_RAM=\"$VM_RAM\""
     echo "VM_CPUS=\"$VM_CPUS\""
     echo "SSH_PORT_BASE=\"$SSH_PORT_BASE\""
@@ -132,10 +137,10 @@ set_config_value() {
 
     # Validate key is a known config option
     case "$key" in
-        FLAVOR|VM_RAM|VM_CPUS|SSH_PORT_BASE|BASE_IMAGE_URL|BASE_IMAGE_NAME) ;;
+        FLAVOR|VM_USER|VM_RAM|VM_CPUS|SSH_PORT_BASE|BASE_IMAGE_URL|BASE_IMAGE_NAME) ;;
         *)
             echo "Unknown config key: $key" >&2
-            echo "Valid keys: FLAVOR, VM_RAM, VM_CPUS, SSH_PORT_BASE, BASE_IMAGE_URL, BASE_IMAGE_NAME" >&2
+            echo "Valid keys: FLAVOR, VM_USER, VM_RAM, VM_CPUS, SSH_PORT_BASE, BASE_IMAGE_URL, BASE_IMAGE_NAME" >&2
             return 1
             ;;
     esac

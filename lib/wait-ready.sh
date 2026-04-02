@@ -81,7 +81,7 @@ ssh_probe() {
         -o LogLevel=ERROR \
         -p "$port" \
         -i "$SSH_IDENTITY" \
-        "claude@${host}" \
+        "${VM_USER:-$USER}@${host}" \
         "exit 0" 2>/dev/null
 }
 
@@ -115,7 +115,7 @@ wait_for_ssh_auth() {
             -o LogLevel=ERROR \
             -p "$port" \
             -i "$SSH_IDENTITY" \
-            "claude@${host}" \
+            "${VM_USER:-$USER}@${host}" \
             "echo ready" 2>/dev/null | grep -q "ready"; then
             echo "SSH auth verified (${attempt} attempts)"
             return 0

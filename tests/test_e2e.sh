@@ -148,7 +148,7 @@ _e2e_ssh() {
         -o ConnectTimeout=5 \
         -o BatchMode=yes \
         -p "$ssh_port" \
-        claude@localhost "$@"
+        "${VM_USER:-$USER}@localhost" "$@"
 }
 
 # Launch a project VM for testing
@@ -396,7 +396,7 @@ phase_resume() {
     fi
 
     # Test: snapshot delta persists (cloud-init wrote .bashrc to the overlay)
-    if _e2e_ssh "$FAKE_PROJECT_A" "test -f /home/claude/.bashrc" 2>/dev/null; then
+    if _e2e_ssh "$FAKE_PROJECT_A" "test -f /home/${VM_USER:-$USER}/.bashrc" 2>/dev/null; then
         pass "resume: qcow2 overlay persists across stop+start"
     else
         fail "resume: overlay persistence" ".bashrc missing"

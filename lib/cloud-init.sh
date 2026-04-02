@@ -48,7 +48,7 @@ generate_cloud_init_userdata() {
 hostname: claude-vm
 
 users:
-  - name: claude
+  - name: $VM_USER
     shell: /bin/bash
     sudo: ALL=(ALL) NOPASSWD:ALL
     lock_passwd: false
@@ -71,7 +71,7 @@ write_files:
       MaxStartups 64:30:128
       AcceptEnv LANG LC_*
     permissions: '0644'
-  - path: /home/claude/.bashrc
+  - path: /home/$VM_USER/.bashrc
     content: |
       export PATH="\$HOME/.local/bin:\$PATH"
       if [ -d /workspace ]; then
@@ -102,13 +102,13 @@ write_files:
   - path: /etc/systemd/system/workspace-chown.service
     content: |
       [Unit]
-      Description=Set ownership of /workspace to claude user
+      Description=Set ownership of /workspace to $VM_USER user
       After=workspace.mount
       Requires=workspace.mount
 
       [Service]
       Type=oneshot
-      ExecStart=/bin/chown claude:claude /workspace
+      ExecStart=/bin/chown $VM_USER:$VM_USER /workspace
       RemainAfterExit=yes
 
       [Install]
@@ -119,15 +119,17 @@ runcmd:
   # Workspace mount point
   - mkdir -p /workspace
   - grep -q 'virtiofs' /etc/fstab || echo 'workspace /workspace virtiofs defaults,nofail 0 0' >> /etc/fstab
-  - chown claude:claude /workspace
+  - chown $VM_USER:$VM_USER /workspace
   # Fix ownership of deferred write_files
-  - chown -R claude:claude /home/claude/.bashrc /home/claude/.ssh
+  - chown -R $VM_USER:$VM_USER /home/$VM_USER/.bashrc /home/$VM_USER/.ssh
   # Install Node.js (flavor-specific)
 $nodejs_runcmd
   # Install GitHub CLI (flavor-specific)
 $gh_runcmd
+  # Install uv (Python package manager)
+  - sudo -u $VM_USER bash -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
   # Install Claude Code (native installer, no npm needed)
-  - sudo -u claude bash -c 'curl -fsSL https://claude.ai/install.sh | bash'
+  - sudo -u $VM_USER bash -c 'curl -fsSL https://claude.ai/install.sh | bash'
   # Enable virtiofs workspace mount
   - systemctl daemon-reload
   - systemctl enable workspace.mount

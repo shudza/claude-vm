@@ -25,7 +25,7 @@ _build_ssh_cmd() {
         -o UserKnownHostsFile=/dev/null
         -o LogLevel=ERROR
         -p "$port"
-        claude@localhost
+        "$VM_USER@localhost"
     )
 }
 
@@ -86,24 +86,24 @@ sync_claude_config_to_vm() {
             --include='mcp.json' \
             --include='CLAUDE.md' \
             --exclude='*' \
-            "$HOME/.claude/" "claude@localhost:~/.claude/" 2>/dev/null
+            "$HOME/.claude/" "$VM_USER@localhost:~/.claude/" 2>/dev/null
     fi
 
     # ~/.claude.json (theme, onboarding state — skips welcome wizard)
     if [[ -f "$HOME/.claude.json" ]]; then
-        "${_rsync_cmd[@]}" "$HOME/.claude.json" "claude@localhost:~/.claude.json" 2>/dev/null
+        "${_rsync_cmd[@]}" "$HOME/.claude.json" "$VM_USER@localhost:~/.claude.json" 2>/dev/null
     else
-        "${ssh_cmd[@]}" 'echo "{\"hasCompletedOnboarding\":true}" > ~/.claude.json' 2>/dev/null
+        "${ssh_cmd[@]}" "echo '{\"hasCompletedOnboarding\":true}' > ~/.claude.json" 2>/dev/null
     fi
 
     # ── Git config ────────────────────────────────────────────────────────
     # user.name/email are required for commits; aliases and tool prefs carry over
     if [[ -f "$HOME/.gitconfig" ]]; then
-        "${_rsync_cmd[@]}" "$HOME/.gitconfig" "claude@localhost:~/.gitconfig" 2>/dev/null
+        "${_rsync_cmd[@]}" "$HOME/.gitconfig" "$VM_USER@localhost:~/.gitconfig" 2>/dev/null
     fi
     if [[ -f "${XDG_CONFIG_HOME:-$HOME/.config}/git/config" ]]; then
         "${ssh_cmd[@]}" "mkdir -p ~/.config/git" 2>/dev/null
-        "${_rsync_cmd[@]}" "${XDG_CONFIG_HOME:-$HOME/.config}/git/config" "claude@localhost:~/.config/git/config" 2>/dev/null
+        "${_rsync_cmd[@]}" "${XDG_CONFIG_HOME:-$HOME/.config}/git/config" "$VM_USER@localhost:~/.config/git/config" 2>/dev/null
     fi
 
     # ── GitHub CLI auth ───────────────────────────────────────────────────
@@ -111,7 +111,7 @@ sync_claude_config_to_vm() {
     local gh_config="${XDG_CONFIG_HOME:-$HOME/.config}/gh"
     if [[ -d "$gh_config" ]]; then
         "${ssh_cmd[@]}" "mkdir -p ~/.config/gh" 2>/dev/null
-        "${_rsync_cmd[@]}" "$gh_config/" "claude@localhost:~/.config/gh/" 2>/dev/null
+        "${_rsync_cmd[@]}" "$gh_config/" "$VM_USER@localhost:~/.config/gh/" 2>/dev/null
     fi
 }
 
@@ -272,7 +272,7 @@ launch_vm() {
     ui_phase "Waiting for VM to boot" wait_for_ssh "$ssh_port" 60 "$ssh_key"
 
     # Verify virtiofs mount
-    ui_phase "Mounting workspace" virtiofs_ensure_mounted "$ssh_port" "$ssh_key" "claude"
+    ui_phase "Mounting workspace" virtiofs_ensure_mounted "$ssh_port" "$ssh_key" "$VM_USER"
 
     # Sync Claude Code config
     ui_phase "Syncing config" sync_claude_config_to_vm "$ssh_port"
@@ -349,7 +349,7 @@ wait_for_ssh() {
         if ssh "${key_opt[@]}" -o ConnectTimeout=2 -o StrictHostKeyChecking=no \
                -o UserKnownHostsFile=/dev/null \
                -o BatchMode=yes \
-               -p "$port" claude@localhost true 2>/dev/null; then
+               -p "$port" "$VM_USER@localhost" true 2>/dev/null; then
             echo "  SSH ready!"
             return 0
         fi

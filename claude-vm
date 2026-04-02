@@ -47,7 +47,7 @@ Usage:
   claude-vm help                Show this help
 
 Flavors:
-  debian (default)              Debian 12 genericcloud — minimal, no snapd
+  debian (default)              Debian 13 (trixie) genericcloud — minimal, no snapd
   ubuntu                        Ubuntu 24.04 minimal cloud image
 
 Configuration:
@@ -55,6 +55,7 @@ Configuration:
 
   Configurable keys:
     FLAVOR          Base image flavor (default: debian)
+    VM_USER         Guest username (default: $USER)
     VM_RAM          RAM allocation (default: 4G)
     VM_CPUS         CPU cores (default: 2)
     SSH_PORT_BASE   Starting SSH port (default: 10022)
@@ -64,6 +65,7 @@ Configuration:
 Environment:
   CLAUDE_VM_DIR                 Data directory (default: ~/.claude-vm)
   FLAVOR                        Override flavor (e.g., FLAVOR=ubuntu claude-vm build)
+  VM_USER                       Override guest username (default: $USER)
   VM_RAM                        Override RAM (e.g., VM_RAM=8G claude-vm)
   VM_CPUS                       Override CPUs (e.g., VM_CPUS=4 claude-vm)
 
@@ -104,6 +106,7 @@ cmd_config() {
             local key="$1"
             case "$key" in
                 FLAVOR) echo "$FLAVOR" ;;
+                VM_USER) echo "$VM_USER" ;;
                 VM_RAM) echo "$VM_RAM" ;;
                 VM_CPUS) echo "$VM_CPUS" ;;
                 SSH_PORT_BASE) echo "$SSH_PORT_BASE" ;;
@@ -139,7 +142,7 @@ DEFAULTS
             echo "  get KEY           Get a config value"
             echo "  edit              Open config file in \$EDITOR"
             echo ""
-            echo "Keys: FLAVOR, VM_RAM, VM_CPUS, SSH_PORT_BASE, BASE_IMAGE_URL, BASE_IMAGE_NAME"
+            echo "Keys: FLAVOR, VM_USER, VM_RAM, VM_CPUS, SSH_PORT_BASE, BASE_IMAGE_URL, BASE_IMAGE_NAME"
             ;;
         *)
             echo "Unknown config subcommand: $subcmd" >&2
