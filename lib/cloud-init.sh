@@ -47,6 +47,10 @@ generate_cloud_init_userdata() {
 
 hostname: claude-vm
 
+# Sync package DB before installing (needed for pacman/dnf; harmless for apt)
+package_update: true
+package_upgrade: false
+
 users:
   - name: $VM_USER
     shell: /bin/bash
@@ -241,6 +245,82 @@ packages:
   - gnupg
 PKG
             ;;
+        archlinux)
+            cat << 'PKG'
+packages:
+  # Core (Claude Code depends on these)
+  - openssh
+  - git
+  - curl
+  - wget
+  - jq
+  - ripgrep
+  # Build tools (native npm modules, compilation)
+  - base-devel
+  - cmake
+  # Runtimes
+  - python
+  - python-pip
+  # Tools Claude reaches for in bash
+  - vim
+  - file
+  - sqlite
+  - bc
+  - strace
+  - lsof
+  - bind-tools
+  - openbsd-netcat
+  - iputils
+  - socat
+  - patch
+  # Utilities
+  - tmux
+  - tree
+  - unzip
+  - rsync
+  - ca-certificates
+  - gnupg
+PKG
+            ;;
+        fedora)
+            cat << 'PKG'
+packages:
+  # Core (Claude Code depends on these)
+  - openssh-server
+  - git
+  - curl
+  - wget
+  - jq
+  - ripgrep
+  # Build tools (native npm modules, compilation)
+  - gcc
+  - gcc-c++
+  - make
+  - cmake
+  # Runtimes
+  - python3
+  - python3-pip
+  # Tools Claude reaches for in bash
+  - vim-minimal
+  - file
+  - sqlite
+  - bc
+  - strace
+  - lsof
+  - bind-utils
+  - nmap-ncat
+  - iputils
+  - socat
+  - patch
+  # Utilities
+  - tmux
+  - tree
+  - unzip
+  - rsync
+  - ca-certificates
+  - gnupg2
+PKG
+            ;;
     esac
 }
 
@@ -251,6 +331,16 @@ _cloud_init_nodejs_runcmd() {
             cat << 'CMD'
   - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
   - apt-get install -y nodejs
+CMD
+            ;;
+        archlinux)
+            cat << 'CMD'
+  - pacman -Sy --noconfirm nodejs npm
+CMD
+            ;;
+        fedora)
+            cat << 'CMD'
+  - dnf install -y nodejs npm
 CMD
             ;;
     esac
@@ -268,6 +358,16 @@ _cloud_init_gh_runcmd() {
   - echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
   - apt-get update
   - apt-get install -y gh
+CMD
+            ;;
+        archlinux)
+            cat << 'CMD'
+  - pacman -Sy --noconfirm github-cli
+CMD
+            ;;
+        fedora)
+            cat << 'CMD'
+  - dnf install -y gh
 CMD
             ;;
     esac
@@ -306,6 +406,21 @@ CMD
   - journalctl --vacuum-size=8M || true
 CMD
             ;;
+        archlinux)
+            cat << 'CMD'
+  # Clean package cache
+  - pacman -Scc --noconfirm || true
+  - journalctl --vacuum-size=8M || true
+CMD
+            ;;
+        fedora)
+            cat << 'CMD'
+  # Disable background services that bloat snapshots and waste CPU
+  - systemctl disable --now dnf-makecache.timer || true
+  - dnf clean all
+  - journalctl --vacuum-size=8M || true
+CMD
+            ;;
     esac
 }
 
@@ -314,6 +429,8 @@ _cloud_init_ssh_service() {
     case "$flavor" in
         debian) echo "ssh" ;;
         ubuntu) echo "ssh" ;;
+        archlinux) echo "sshd" ;;
+        fedora) echo "sshd" ;;
     esac
 }
 

@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
-# test_e2e.sh — End-to-end tests for claude-vm
+# test_e2e_archlinux.sh — End-to-end tests for claude-vm with Arch Linux flavor
 #
 # Runs real QEMU VMs with virtiofs, testing the full CLI workflow:
 #   build → launch → use → stop → resume → reset → destroy
 #
+# Mirrors test_e2e.sh but uses FLAVOR=archlinux.
+#
 # Prerequisites: /dev/kvm, qemu-system-x86_64, virtiofsd, genisoimage, etc.
 # Skips gracefully (exit 0) if prerequisites are missing.
 #
-# Expected environment: a claude-vm instance (nested KVM) or any
-# KVM-capable Linux host with all deps installed.
-#
-# Run: bash tests/test_e2e.sh
-#   or: make test-e2e
+# Run: bash tests/test_e2e_archlinux.sh
+#   or: make test-e2e-archlinux
 
 # Note: no set -e — test runner handles errors via pass/fail/skip
 set -uo pipefail
@@ -31,7 +30,6 @@ pass() { (( ++TESTS_PASSED )); (( ++TESTS_RUN )); echo "  PASS: $1"; }
 fail() { (( ++TESTS_FAILED )); (( ++TESTS_RUN )); echo "  FAIL: $1 — $2"; }
 skip() { (( ++TESTS_SKIPPED )); (( ++TESTS_RUN )); echo "  SKIP: $1"; }
 
-# Phase gating — if a critical phase fails, skip dependent phases
 PHASE_OK=true
 _require_phase() {
     if [[ "$PHASE_OK" != "true" ]]; then
@@ -55,7 +53,6 @@ check_prerequisites() {
         command -v "$cmd" &>/dev/null || missing+=("$cmd")
     done
 
-    # virtiofsd is often not in PATH — check common install locations
     local vfs_found=false
     for candidate in virtiofsd /usr/lib/virtiofsd /usr/libexec/virtiofsd /usr/lib/qemu/virtiofsd /usr/lib/kvm/virtiofsd; do
         if command -v "$candidate" &>/dev/null || [[ -x "$candidate" ]]; then
@@ -65,7 +62,6 @@ check_prerequisites() {
     done
     $vfs_found || missing+=("virtiofsd")
 
-    # Need at least one ISO tool
     local has_iso=false
     for cmd in genisoimage mkisofs xorrisofs; do
         command -v "$cmd" &>/dev/null && has_iso=true && break
@@ -85,23 +81,23 @@ FAKE_PROJECT_A=""
 FAKE_PROJECT_B=""
 
 setup_e2e() {
-    E2E_DIR="$(mktemp -d /tmp/claude-vm-e2e-XXXXXX)"
+    E2E_DIR="$(mktemp -d /tmp/claude-vm-e2e-arch-XXXXXX)"
     export CLAUDE_VM_DIR="$E2E_DIR/data"
-    export SSH_PORT_BASE=15022
+    export SSH_PORT_BASE=16022
+    export FLAVOR=archlinux
     export CLAUDE_VM_QUIET=true
 
-    FAKE_PROJECT_A="$E2E_DIR/project-a"
-    FAKE_PROJECT_B="$E2E_DIR/project-b"
+    FAKE_PROJECT_A="$E2E_DIR/project-arch-a"
+    FAKE_PROJECT_B="$E2E_DIR/project-arch-b"
     mkdir -p "$FAKE_PROJECT_A" "$FAKE_PROJECT_B"
-    echo "hello from project A" > "$FAKE_PROJECT_A/testfile.txt"
-    echo "hello from project B" > "$FAKE_PROJECT_B/testfile.txt"
+    echo "hello from arch project A" > "$FAKE_PROJECT_A/testfile.txt"
+    echo "hello from arch project B" > "$FAKE_PROJECT_B/testfile.txt"
 }
 
 cleanup_e2e() {
     echo ""
     echo "Cleaning up..."
 
-    # Stop all VMs gracefully (best effort)
     if [[ -d "${CLAUDE_VM_DIR:-}/run" ]]; then
         for pid_file in "$CLAUDE_VM_DIR"/run/*/qemu.pid; do
             [[ -f "$pid_file" ]] || continue
@@ -121,17 +117,13 @@ cleanup_e2e() {
         done
     fi
 
-    # Safety net
-    pkill -f "claude-vm-e2e" 2>/dev/null || true
-
+    pkill -f "claude-vm-e2e-arch" 2>/dev/null || true
     sleep 1
     rm -rf "$E2E_DIR" 2>/dev/null || true
 }
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-# SSH into a project's VM
-# Usage: _e2e_ssh /path/to/project "command"
 _e2e_ssh() {
     local project_dir="$1"
     shift
@@ -151,18 +143,11 @@ _e2e_ssh() {
         "${VM_USER:-$USER}@localhost" "$@"
 }
 
-# Launch a project VM for testing
-# Handles the interactive prompt and the exec-ssh exit
 _e2e_launch() {
     local project_dir="$1"
-    # echo y answers the first-launch confirmation prompt.
-    # After the prompt is consumed, stdin hits EOF. The VM setup completes
-    # fully, then exec ssh -t tries to launch Claude Code which fails
-    # because there's no TTY/input. That error is expected and filtered.
     echo y | timeout 180 bash "$CLAUDE_VM" launch "$project_dir" 2>&1 | grep -v "^Error: Input must be" || true
 }
 
-# Run claude-vm from a project directory
 _e2e_cmd() {
     local project_dir="$1"
     shift
@@ -175,9 +160,8 @@ phase_build() {
     echo ""
     echo "=== Phase 1: Build ==="
 
-    # Test: build creates base image
     local output
-    if output=$(timeout 600 bash "$CLAUDE_VM" build 2>&1); then
+    if output=$(timeout 600 bash "$CLAUDE_VM" build --flavor archlinux 2>&1); then
         local base_img="$CLAUDE_VM_DIR/base/base.qcow2"
         if [[ -f "$base_img" ]] && qemu-img check "$base_img" &>/dev/null; then
             pass "build creates valid base image"
@@ -197,7 +181,7 @@ phase_build() {
     # Test: build is idempotent
     local start_time
     start_time=$(date +%s)
-    output=$(timeout 30 bash "$CLAUDE_VM" build 2>&1) || true
+    output=$(timeout 30 bash "$CLAUDE_VM" build --flavor archlinux 2>&1) || true
     local elapsed=$(( $(date +%s) - start_time ))
     if echo "$output" | grep -q "already exists" && (( elapsed < 10 )); then
         pass "build is idempotent (${elapsed}s, prints 'already exists')"
@@ -263,6 +247,15 @@ phase_launch() {
         return
     fi
 
+    # Test: correct distro
+    local distro_id
+    distro_id=$(_e2e_ssh "$FAKE_PROJECT_A" "grep ^ID= /etc/os-release | cut -d= -f2" 2>/dev/null) || true
+    if [[ "$distro_id" == "arch" ]]; then
+        pass "guest is Arch Linux"
+    else
+        fail "guest is Arch Linux" "got ID=$distro_id"
+    fi
+
     # Test: virtiofs mounted
     if _e2e_ssh "$FAKE_PROJECT_A" "mount | grep -q virtiofs" 2>/dev/null; then
         pass "virtiofs is mounted in guest"
@@ -273,10 +266,10 @@ phase_launch() {
     # Test: virtiofs read
     local guest_content
     guest_content=$(_e2e_ssh "$FAKE_PROJECT_A" "cat /workspace/testfile.txt" 2>/dev/null) || true
-    if [[ "$guest_content" == "hello from project A" ]]; then
+    if [[ "$guest_content" == "hello from arch project A" ]]; then
         pass "virtiofs read: host file readable from guest"
     else
-        fail "virtiofs read" "expected 'hello from project A', got '$guest_content'"
+        fail "virtiofs read" "expected 'hello from arch project A', got '$guest_content'"
     fi
 
     # Test: virtiofs write
@@ -296,15 +289,22 @@ phase_launch() {
 
     # Test: core packages installed (these come from the packages: block in cloud-init)
     local missing_pkgs=()
-    for pkg in git rsync jq ripgrep curl cmake strace socat tmux tree; do
-        if ! _e2e_ssh "$FAKE_PROJECT_A" "dpkg -s $pkg" &>/dev/null; then
+    for pkg in git rsync jq ripgrep curl cmake strace socat tmux tree openssh openbsd-netcat; do
+        if ! _e2e_ssh "$FAKE_PROJECT_A" "pacman -Q $pkg" &>/dev/null; then
             missing_pkgs+=("$pkg")
         fi
     done
     if (( ${#missing_pkgs[@]} == 0 )); then
-        pass "core packages installed (dpkg -s)"
+        pass "core packages installed (pacman -Q)"
     else
         fail "core packages installed" "missing: ${missing_pkgs[*]}"
+    fi
+
+    # Test: pacman available (Arch package manager)
+    if _e2e_ssh "$FAKE_PROJECT_A" "command -v pacman" &>/dev/null; then
+        pass "pacman available in guest"
+    else
+        fail "pacman available in guest" "not found"
     fi
 
     # Test: Claude Code installed
@@ -312,6 +312,13 @@ phase_launch() {
         pass "Claude Code installed in VM"
     else
         fail "Claude Code not installed in VM" "claude binary not found in PATH or ~/.local/bin"
+    fi
+
+    # Test: config sync — .bashrc should exist (written by cloud-init + synced)
+    if _e2e_ssh "$FAKE_PROJECT_A" "test -f /home/${VM_USER:-$USER}/.bashrc" 2>/dev/null; then
+        pass "config sync: .bashrc present in guest"
+    else
+        fail "config sync: .bashrc present in guest" "file missing"
     fi
 }
 
@@ -401,7 +408,7 @@ phase_resume() {
     # Test: virtiofs still works
     local content
     content=$(_e2e_ssh "$FAKE_PROJECT_A" "cat /workspace/testfile.txt" 2>/dev/null) || true
-    if [[ "$content" == "hello from project A" ]]; then
+    if [[ "$content" == "hello from arch project A" ]]; then
         pass "resume: virtiofs mount works"
     else
         fail "resume: virtiofs" "got '$content'"
@@ -489,7 +496,7 @@ main() {
     setup_e2e
     trap cleanup_e2e EXIT INT TERM
 
-    echo "=== claude-vm E2E tests ==="
+    echo "=== claude-vm E2E tests (archlinux) ==="
     echo "E2E_DIR: $E2E_DIR"
     echo "CLAUDE_VM_DIR: $CLAUDE_VM_DIR"
 
@@ -502,7 +509,7 @@ main() {
     phase_destroy
 
     echo ""
-    echo "=== Results: $TESTS_PASSED passed, $TESTS_FAILED failed, $TESTS_SKIPPED skipped, $TESTS_RUN total ==="
+    echo "=== Results (archlinux): $TESTS_PASSED passed, $TESTS_FAILED failed, $TESTS_SKIPPED skipped, $TESTS_RUN total ==="
 
     (( TESTS_FAILED > 0 )) && exit 1
     exit 0

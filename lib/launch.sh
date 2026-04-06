@@ -40,7 +40,7 @@ connect_vm() {
     else
         # Launch Claude Code with full sandbox permissions
         exec "${_ssh_cmd[@]}" -t \
-            "cd /workspace 2>/dev/null; [ -f ~/.env ] && . ~/.env; exec claude --dangerously-skip-permissions"
+            "export PATH=\"\$HOME/.local/bin:\$PATH\"; cd /workspace 2>/dev/null; [ -f ~/.env ] && . ~/.env; exec claude --dangerously-skip-permissions"
     fi
 }
 

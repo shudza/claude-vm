@@ -64,7 +64,21 @@ verify_cloud_image() {
     local img_name
     img_name="$(basename "$img_path")"
     local expected_hash
-    expected_hash=$(echo "$checksums" | grep -F "$img_name" | awk '{print $1}')
+
+    # Handle different checksum file formats:
+    # - Standard:  "hash  filename" (Debian, Ubuntu)
+    # - BSD/tag:   "SHA256 (filename) = hash"
+    # - Fedora:    "# filename: size bytes\nhash" (hash on line after comment)
+    if echo "$checksums" | grep -qE '^SHA(256|512) \('; then
+        # BSD/tag format: "SHA256 (filename) = hash"
+        expected_hash=$(echo "$checksums" | grep -F "$img_name" | grep -v '^#' | sed 's/.*= //')
+    elif echo "$checksums" | grep -qE "^# .*${img_name}:"; then
+        # Fedora format: comment with filename, hash on the next line
+        expected_hash=$(echo "$checksums" | grep -A1 "^# .*${img_name}:" | tail -1)
+    else
+        # Standard format: "hash  filename"
+        expected_hash=$(echo "$checksums" | grep -F "$img_name" | awk '{print $1}')
+    fi
 
     if [[ -z "$expected_hash" ]]; then
         echo "  WARNING: Image '$img_name' not found in upstream checksum file" >&2
@@ -184,6 +198,9 @@ check_build_prerequisites() {
         echo "" >&2
         echo "Install on Ubuntu/Debian:" >&2
         echo "  sudo apt install qemu-system-x86 qemu-utils genisoimage curl" >&2
+        echo "" >&2
+        echo "Install on Fedora:" >&2
+        echo "  sudo dnf install qemu-system-x86 qemu-img genisoimage curl" >&2
         return 1
     fi
 

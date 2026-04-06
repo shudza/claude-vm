@@ -49,6 +49,8 @@ Usage:
 Flavors:
   debian (default)              Debian 13 (trixie) genericcloud — minimal, no snapd
   ubuntu                        Ubuntu 24.04 minimal cloud image
+  archlinux                     Arch Linux cloud image (rolling release)
+  fedora                        Fedora 41 Cloud Base
 
 Configuration:
   ~/.claude-vm/config           Config file (FLAVOR, VM_RAM, VM_CPUS, etc.)
