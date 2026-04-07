@@ -40,7 +40,7 @@ connect_vm() {
     else
         # Launch Claude Code with full sandbox permissions
         exec "${_ssh_cmd[@]}" -t \
-            "export PATH=\"\$HOME/.local/bin:\$PATH\"; cd /workspace 2>/dev/null; [ -f ~/.env ] && . ~/.env; exec claude --dangerously-skip-permissions"
+            "export PATH=\"\$HOME/.local/bin:\$PATH\"; export COLORTERM=truecolor; cd /workspace 2>/dev/null; [ -f ~/.env ] && . ~/.env; exec claude --dangerously-skip-permissions"
     fi
 }
 
@@ -85,6 +85,7 @@ sync_claude_config_to_vm() {
             --include='skills/***' \
             --include='mcp.json' \
             --include='CLAUDE.md' \
+            --include='statusline-command.sh' \
             --exclude='*' \
             "$HOME/.claude/" "$VM_USER@localhost:~/.claude/" 2>/dev/null
     fi

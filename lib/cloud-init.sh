@@ -78,6 +78,7 @@ write_files:
   - path: /home/$VM_USER/.bashrc
     content: |
       export PATH="\$HOME/.local/bin:\$PATH"
+      [ -z "\$COLORTERM" ] && export COLORTERM=truecolor
       if [ -d /workspace ]; then
         cd /workspace 2>/dev/null
       fi
