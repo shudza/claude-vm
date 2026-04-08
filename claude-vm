@@ -61,6 +61,7 @@ Configuration:
     VM_RAM          RAM allocation (default: 4G)
     VM_CPUS         CPU cores (default: 2)
     SSH_PORT_BASE   Starting SSH port (default: 10022)
+    FORWARD_PORTS   Extra ports to forward (e.g., 8080,3000:3000,9000-9002)
 
   Priority: defaults < config file < environment variables
 
@@ -70,6 +71,7 @@ Environment:
   VM_USER                       Override guest username (default: $USER)
   VM_RAM                        Override RAM (e.g., VM_RAM=8G claude-vm)
   VM_CPUS                       Override CPUs (e.g., VM_CPUS=4 claude-vm)
+  FORWARD_PORTS                 Extra port forwards (e.g., FORWARD_PORTS=8080 claude-vm)
 
 EOF
 }
@@ -112,6 +114,7 @@ cmd_config() {
                 VM_RAM) echo "$VM_RAM" ;;
                 VM_CPUS) echo "$VM_CPUS" ;;
                 SSH_PORT_BASE) echo "$SSH_PORT_BASE" ;;
+                FORWARD_PORTS) get_project_forward_ports "$PWD" ;;
                 BASE_IMAGE_URL) echo "$BASE_IMAGE_URL" ;;
                 BASE_IMAGE_NAME) echo "$BASE_IMAGE_NAME" ;;
                 *)
@@ -144,7 +147,7 @@ DEFAULTS
             echo "  get KEY           Get a config value"
             echo "  edit              Open config file in \$EDITOR"
             echo ""
-            echo "Keys: FLAVOR, VM_USER, VM_RAM, VM_CPUS, SSH_PORT_BASE, BASE_IMAGE_URL, BASE_IMAGE_NAME"
+            echo "Keys: FLAVOR, VM_USER, VM_RAM, VM_CPUS, SSH_PORT_BASE, BASE_IMAGE_URL, BASE_IMAGE_NAME, FORWARD_PORTS"
             ;;
         *)
             echo "Unknown config subcommand: $subcmd" >&2
@@ -303,7 +306,7 @@ cmd_reset() {
     if [[ -f "$snap_path" ]]; then
         local hash
         hash="$(project_hash "$project_dir")"
-        rm -f "$snap_path" "$SNAPSHOTS_DIR/${hash}.project"
+        rm -f "$snap_path" "$SNAPSHOTS_DIR/${hash}.project" "$SNAPSHOTS_DIR/${hash}.ports"
         echo "Project snapshot removed: $snap_path"
         echo "Next launch will create a fresh snapshot from base image."
     else

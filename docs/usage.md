@@ -170,6 +170,7 @@ SSH_PORT_BASE="10022"
 | `SSH_PORT_BASE` | `10022` | 1024-65535 | Starting SSH port |
 | `BASE_IMAGE_URL` | (from flavor) | URL | Cloud image download URL |
 | `BASE_IMAGE_NAME` | (from flavor) | Filename | Cloud image filename |
+| `FORWARD_PORTS` | (none) | Comma-separated port specs | Extra ports to forward (per-project) |
 
 ### Priority
 
@@ -188,6 +189,7 @@ defaults < config file < environment variables
 | `SSH_PORT_BASE` | Override SSH port base |
 | `BASE_IMAGE_URL` | Override cloud image URL |
 | `BASE_IMAGE_NAME` | Override cloud image filename |
+| `FORWARD_PORTS` | Extra port forwards (see Port Forwarding below) |
 | `CLAUDE_VM_VERBOSE` | Set to `true` to show all output (no spinner) |
 | `CLAUDE_VM_QUIET` | Set to `true` to suppress spinner |
 
@@ -268,6 +270,42 @@ To see full output during launch/stop, use verbose mode:
 
 ```bash
 CLAUDE_VM_VERBOSE=true claude-vm
+```
+
+## Port Forwarding
+
+Forward additional ports from the VM to the host using `FORWARD_PORTS`. SSH (port 22) is always forwarded automatically.
+
+Port forwards are **per-project** — each project directory can have its own set of forwarded ports. This prevents collisions when running multiple VMs simultaneously.
+
+### Port Spec Formats
+
+| Format | Example | Description |
+|-|-|-|
+| `PORT` | `8080` | Forward host:8080 → guest:8080 |
+| `HOST:GUEST` | `8080:3000` | Forward host:8080 → guest:3000 |
+| `START-END` | `9000-9005` | Forward a range 1:1 (6 ports) |
+| `HSTART-HEND:GSTART-GEND` | `8080-8082:3000-3002` | Mapped range (must be equal length) |
+
+Multiple specs are comma-separated. Ranges are capped at 100 ports.
+
+### Examples
+
+```bash
+# Forward port 8080 for the current project
+claude-vm config set FORWARD_PORTS 8080
+
+# Forward multiple ports (dev server + API)
+claude-vm config set FORWARD_PORTS "3000,8080:8080"
+
+# Forward a range of ports
+claude-vm config set FORWARD_PORTS "9000-9005"
+
+# Clear port forwards for current project
+claude-vm config set FORWARD_PORTS ""
+
+# Environment variable override (applies to this launch only)
+FORWARD_PORTS="8080,3000" claude-vm
 ```
 
 ## Examples

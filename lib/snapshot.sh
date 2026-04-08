@@ -232,7 +232,7 @@ delete_snapshot() {
 
     local hash
     hash="$(project_hash "$project_dir")"
-    rm -f "$snap_path" "$SNAPSHOTS_DIR/${hash}.project"
+    rm -f "$snap_path" "$SNAPSHOTS_DIR/${hash}.project" "$SNAPSHOTS_DIR/${hash}.ports"
     echo "Snapshot deleted: $snap_path"
 }
 
@@ -246,7 +246,7 @@ delete_all_snapshots() {
         if [[ -f "$snap" ]]; then
             local hash
             hash="$(basename "$snap" .qcow2)"
-            rm -f "$snap" "$SNAPSHOTS_DIR/${hash}.project"
+            rm -f "$snap" "$SNAPSHOTS_DIR/${hash}.project" "$SNAPSHOTS_DIR/${hash}.ports"
             count=$(( count + 1 ))
         fi
     done

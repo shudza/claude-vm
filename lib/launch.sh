@@ -165,6 +165,46 @@ is_vm_running() {
     return 1
 }
 
+# Build the hostfwd argument string for QEMU netdev
+# Starts with SSH forwarding, appends any user-configured FORWARD_PORTS
+_build_hostfwd_args() {
+    local ssh_port="$1"
+    local forward_ports="${2:-}"
+    local result="hostfwd=tcp::${ssh_port}-:22"
+
+    [[ -z "$forward_ports" ]] && { echo "$result"; return 0; }
+
+    local IFS=','
+    local specs
+    read -ra specs <<< "$forward_ports"
+
+    local spec
+    for spec in "${specs[@]}"; do
+        spec="$(echo "$spec" | tr -d ' ')"
+        [[ -z "$spec" ]] && continue
+
+        if [[ "$spec" =~ ^([0-9]+)-([0-9]+):([0-9]+)-([0-9]+)$ ]]; then
+            local hs="${BASH_REMATCH[1]}" he="${BASH_REMATCH[2]}" gs="${BASH_REMATCH[3]}"
+            local i
+            for (( i = 0; i <= he - hs; i++ )); do
+                result+=",hostfwd=tcp::$(( hs + i ))-:$(( gs + i ))"
+            done
+        elif [[ "$spec" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+            local rs="${BASH_REMATCH[1]}" re="${BASH_REMATCH[2]}"
+            local p
+            for (( p = rs; p <= re; p++ )); do
+                result+=",hostfwd=tcp::${p}-:${p}"
+            done
+        elif [[ "$spec" =~ ^([0-9]+):([0-9]+)$ ]]; then
+            result+=",hostfwd=tcp::${BASH_REMATCH[1]}-:${BASH_REMATCH[2]}"
+        elif [[ "$spec" =~ ^([0-9]+)$ ]]; then
+            result+=",hostfwd=tcp::${BASH_REMATCH[1]}-:${BASH_REMATCH[1]}"
+        fi
+    done
+
+    echo "$result"
+}
+
 # Launch a VM for the current project
 # This is the main entry point for `claude-vm` (no subcommand)
 launch_vm() {
@@ -242,6 +282,12 @@ launch_vm() {
     # Start virtiofsd
     ui_phase "Setting up filesystem sharing" start_virtiofsd "$project_dir" "$virtiofs_sock" "$run_dir"
 
+    # Build hostfwd string from SSH port + per-project FORWARD_PORTS
+    local project_forward_ports
+    project_forward_ports="$(get_project_forward_ports "$project_dir")"
+    local hostfwd_args
+    hostfwd_args="$(_build_hostfwd_args "$ssh_port" "$project_forward_ports")"
+
     # Build and launch QEMU
     _launch_qemu() {
         local qemu_args=(
@@ -253,7 +299,7 @@ launch_vm() {
             -object "memory-backend-memfd,id=mem,size=$VM_RAM,share=on"
             -numa "node,memdev=mem"
             -drive "file=$snap_path,format=qcow2,if=virtio,cache=writeback,discard=unmap,detect-zeroes=unmap"
-            -netdev "user,id=net0,hostfwd=tcp::${ssh_port}-:22"
+            -netdev "user,id=net0,${hostfwd_args}"
             -device "virtio-net-pci,netdev=net0"
             -chardev "socket,id=vhost-fs,path=$virtiofs_sock"
             -device "vhost-user-fs-pci,chardev=vhost-fs,tag=workspace,queue-size=1024"
