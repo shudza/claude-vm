@@ -133,6 +133,33 @@ Claude Code instances: 3
 Base image: 1.5G
 ```
 
+### `claude-vm show`
+
+Display the full QEMU launch command and SSH command for the current project. Useful for debugging, scripting, or understanding what `claude-vm` does under the hood.
+
+```bash
+claude-vm show
+claude-vm show /path/to/project
+```
+
+If the VM is running, shows the actual SSH port in use. Otherwise, shows the configured base port.
+
+Output:
+
+```
+# QEMU command
+qemu-system-x86_64 \
+  -name "claude-vm-abc123def456" \
+  -machine "type=q35,accel=kvm" \
+  -cpu host \
+  -smp 2 \
+  ...
+  -daemonize
+
+# SSH command
+ssh -i ~/.claude-vm/keys/id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -p 10022 user@localhost
+```
+
 ### `claude-vm config`
 
 Manage configuration.

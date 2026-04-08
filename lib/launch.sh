@@ -205,6 +205,54 @@ _build_hostfwd_args() {
     echo "$result"
 }
 
+# Detect QEMU acceleration method
+_detect_accel() {
+    if [[ -r /dev/kvm ]] && [[ -w /dev/kvm ]]; then
+        echo "kvm"
+    else
+        echo "tcg"
+    fi
+}
+
+# Build QEMU argument array and store in _qemu_args
+# Reads from caller's locals/globals: project_dir, snap_path, run_dir, accel,
+#   ssh_port, VM_CPUS, VM_RAM
+# Sets: _qemu_args array
+_build_qemu_args() {
+    local project_dir="$1"
+    local snap_path="$2"
+    local run_dir="$3"
+    local accel="$4"
+    local ssh_port="$5"
+
+    local virtiofs_sock="$run_dir/virtiofs.sock"
+
+    local project_forward_ports
+    project_forward_ports="$(get_project_forward_ports "$project_dir")"
+    local hostfwd_args
+    hostfwd_args="$(_build_hostfwd_args "$ssh_port" "$project_forward_ports")"
+
+    _qemu_args=(
+        -name "claude-vm-$(project_hash "$project_dir")"
+        -machine "type=q35,accel=$accel"
+        -cpu host
+        -smp "$VM_CPUS"
+        -m "$VM_RAM"
+        -object "memory-backend-memfd,id=mem,size=$VM_RAM,share=on"
+        -numa "node,memdev=mem"
+        -drive "file=$snap_path,format=qcow2,if=virtio,cache=writeback,discard=unmap,detect-zeroes=unmap"
+        -netdev "user,id=net0,${hostfwd_args}"
+        -device "virtio-net-pci,netdev=net0"
+        -chardev "socket,id=vhost-fs,path=$virtiofs_sock"
+        -device "vhost-user-fs-pci,chardev=vhost-fs,tag=workspace,queue-size=1024"
+        -display none
+        -serial "file:$run_dir/serial.log"
+        -monitor "unix:$run_dir/monitor.sock,server,nowait"
+        -pidfile "$run_dir/qemu.pid"
+        -daemonize
+    )
+}
+
 # Launch a VM for the current project
 # This is the main entry point for `claude-vm` (no subcommand)
 launch_vm() {
@@ -270,48 +318,18 @@ launch_vm() {
     echo "$ssh_port" > "$run_dir/ssh_port"
 
     # Determine acceleration
-    local accel="kvm"
-    if [[ ! -r /dev/kvm ]] || [[ ! -w /dev/kvm ]]; then
+    local accel
+    accel="$(_detect_accel)"
+    if [[ "$accel" != "kvm" ]]; then
         ui_warn "KVM not accessible — falling back to TCG (slower)"
-        accel="tcg"
     fi
 
-    # Setup virtiofs socket path
-    local virtiofs_sock="$run_dir/virtiofs.sock"
-
     # Start virtiofsd
-    ui_phase "Setting up filesystem sharing" start_virtiofsd "$project_dir" "$virtiofs_sock" "$run_dir"
-
-    # Build hostfwd string from SSH port + per-project FORWARD_PORTS
-    local project_forward_ports
-    project_forward_ports="$(get_project_forward_ports "$project_dir")"
-    local hostfwd_args
-    hostfwd_args="$(_build_hostfwd_args "$ssh_port" "$project_forward_ports")"
+    ui_phase "Setting up filesystem sharing" start_virtiofsd "$project_dir" "$run_dir/virtiofs.sock" "$run_dir"
 
     # Build and launch QEMU
-    _launch_qemu() {
-        local qemu_args=(
-            -name "claude-vm-$(project_hash "$project_dir")"
-            -machine "type=q35,accel=$accel"
-            -cpu host
-            -smp "$VM_CPUS"
-            -m "$VM_RAM"
-            -object "memory-backend-memfd,id=mem,size=$VM_RAM,share=on"
-            -numa "node,memdev=mem"
-            -drive "file=$snap_path,format=qcow2,if=virtio,cache=writeback,discard=unmap,detect-zeroes=unmap"
-            -netdev "user,id=net0,${hostfwd_args}"
-            -device "virtio-net-pci,netdev=net0"
-            -chardev "socket,id=vhost-fs,path=$virtiofs_sock"
-            -device "vhost-user-fs-pci,chardev=vhost-fs,tag=workspace,queue-size=1024"
-            -display none
-            -serial "file:$run_dir/serial.log"
-            -monitor "unix:$run_dir/monitor.sock,server,nowait"
-            -pidfile "$run_dir/qemu.pid"
-            -daemonize
-        )
-        qemu-system-x86_64 "${qemu_args[@]}"
-    }
-    ui_phase "Starting VM" _launch_qemu
+    _build_qemu_args "$project_dir" "$snap_path" "$run_dir" "$accel" "$ssh_port"
+    ui_phase "Starting VM" qemu-system-x86_64 "${_qemu_args[@]}"
 
     # Wait for SSH
     local ssh_key

@@ -40,6 +40,7 @@ Usage:
   claude-vm destroy --all       Remove ALL claude-vm data (base + all snapshots)
   claude-vm list                List all project snapshots
   claude-vm status              Show status of current project's sandbox
+  claude-vm show                Show full QEMU and SSH commands for this project
   claude-vm config              Show effective configuration
   claude-vm config set KEY VAL  Set a config value (e.g., VM_RAM=8G)
   claude-vm config get KEY      Get a config value
@@ -515,6 +516,51 @@ cmd_status() {
     fi
 }
 
+# Show command — display the full QEMU launch and SSH commands
+cmd_show() {
+    local project_dir="${1:-$PWD}"
+    load_config
+    ensure_dirs
+
+    local snap_path run_dir ssh_port accel
+    snap_path="$(project_snapshot_path "$project_dir")"
+    run_dir="$(project_run_dir "$project_dir")"
+
+    if is_vm_running "$project_dir"; then
+        ssh_port="$(get_project_ssh_port "$project_dir")"
+    else
+        ssh_port="$SSH_PORT_BASE"
+    fi
+
+    accel="$(_detect_accel)"
+
+    local snap_display="$snap_path"
+    [[ ! -f "$snap_path" ]] && snap_display="$snap_path (not yet created)"
+
+    _build_qemu_args "$project_dir" "$snap_display" "$run_dir" "$accel" "$ssh_port"
+
+    echo "# QEMU command"
+    local i=0
+    echo -n "qemu-system-x86_64"
+    while (( i < ${#_qemu_args[@]} )); do
+        local arg="${_qemu_args[$i]}"
+        echo " \\"
+        if [[ "$arg" == -* ]] && (( i + 1 < ${#_qemu_args[@]} )) && [[ "${_qemu_args[$((i+1))]}" != -* ]]; then
+            echo -n "  $arg ${_qemu_args[$((i+1))]}"
+            (( i += 2 ))
+        else
+            echo -n "  $arg"
+            (( i += 1 ))
+        fi
+    done
+    echo ""
+
+    echo ""
+    echo "# SSH command"
+    _build_ssh_cmd "$ssh_port"
+    echo "${_ssh_cmd[*]}"
+}
+
 # Main dispatch
 main() {
     local cmd="${1:-}"
@@ -547,6 +593,9 @@ main() {
             ;;
         status)
             cmd_status "$@"
+            ;;
+        show)
+            cmd_show "$@"
             ;;
         help|--help|-h)
             usage
