@@ -589,6 +589,9 @@ main() {
         ""|launch)
             cmd_launch "$@"
             ;;
+        --)
+            cmd_launch -- "$@"
+            ;;
         build)
             cmd_build "$@"
             ;;

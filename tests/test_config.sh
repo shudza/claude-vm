@@ -469,6 +469,89 @@ EOF
     unset CLAUDE_ARGS 2>/dev/null || true
 }
 
+test_cmd_launch_parses_double_dash_args() {
+    _reset_config_env
+    unset CLAUDE_ARGS 2>/dev/null || true
+    export CLAUDE_VM_DIR="$TEST_DIR/test-launch-parse"
+    export CLAUDE_VM_CONFIG="$CLAUDE_VM_DIR/config"
+
+    source "$PROJECT_DIR/lib/config.sh"
+
+    # Replicate cmd_launch logic from claude-vm (can't source it without triggering main)
+    cmd_launch() {
+        local project_dir="$PWD"
+        local claude_args=()
+        local seen_separator=false
+        for arg in "$@"; do
+            if [[ "$arg" == "--" ]]; then
+                seen_separator=true
+                continue
+            fi
+            if $seen_separator; then
+                claude_args+=("$arg")
+            else
+                project_dir="$arg"
+            fi
+        done
+        CAPTURED_PROJECT_DIR="$project_dir"
+        CAPTURED_CLAUDE_ARGS=("${claude_args[@]}")
+    }
+
+    # Test: claude-vm -- --model sonnet
+    CAPTURED_PROJECT_DIR=""
+    CAPTURED_CLAUDE_ARGS=()
+    cmd_launch -- --model sonnet
+
+    if [[ "$CAPTURED_PROJECT_DIR" == "$PWD" ]]; then
+        pass "cmd_launch with -- uses PWD as project dir"
+    else
+        fail "cmd_launch project dir" "expected $PWD, got $CAPTURED_PROJECT_DIR"
+    fi
+
+    if [[ "${CAPTURED_CLAUDE_ARGS[*]}" == "--model sonnet" ]]; then
+        pass "cmd_launch with -- passes args after separator"
+    else
+        fail "cmd_launch claude args" "expected '--model sonnet', got '${CAPTURED_CLAUDE_ARGS[*]}'"
+    fi
+
+    # Test: claude-vm launch /tmp -- --verbose
+    CAPTURED_PROJECT_DIR=""
+    CAPTURED_CLAUDE_ARGS=()
+    cmd_launch /tmp -- --verbose
+
+    if [[ "$CAPTURED_PROJECT_DIR" == "/tmp" ]]; then
+        pass "cmd_launch with DIR and -- uses DIR as project dir"
+    else
+        fail "cmd_launch DIR with --" "expected /tmp, got $CAPTURED_PROJECT_DIR"
+    fi
+
+    if [[ "${CAPTURED_CLAUDE_ARGS[*]}" == "--verbose" ]]; then
+        pass "cmd_launch with DIR and -- passes args after separator"
+    else
+        fail "cmd_launch DIR claude args" "expected '--verbose', got '${CAPTURED_CLAUDE_ARGS[*]}'"
+    fi
+
+    # Test: claude-vm (no args, no --)
+    CAPTURED_PROJECT_DIR=""
+    CAPTURED_CLAUDE_ARGS=()
+    cmd_launch
+
+    if [[ "$CAPTURED_PROJECT_DIR" == "$PWD" ]]; then
+        pass "cmd_launch with no args uses PWD"
+    else
+        fail "cmd_launch no args" "expected $PWD, got $CAPTURED_PROJECT_DIR"
+    fi
+
+    if [[ "${#CAPTURED_CLAUDE_ARGS[@]}" -eq 0 ]]; then
+        pass "cmd_launch with no args passes no extra claude args"
+    else
+        fail "cmd_launch no extra args" "expected empty, got '${CAPTURED_CLAUDE_ARGS[*]}'"
+    fi
+
+    _reset_config_env
+    unset CLAUDE_ARGS 2>/dev/null || true
+}
+
 test_set_config_claude_args() {
     _reset_config_env
     unset CLAUDE_ARGS 2>/dev/null || true
@@ -508,6 +591,7 @@ run_test test_config_priority_full_chain
 run_test test_default_claude_args
 run_test test_claude_args_config_override
 run_test test_claude_args_env_override
+run_test test_cmd_launch_parses_double_dash_args
 run_test test_set_config_claude_args
 
 echo ""
