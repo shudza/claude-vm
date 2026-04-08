@@ -178,59 +178,6 @@ test_elapsed_ms() {
     fi
 }
 
-# --- Unit tests for qemu-opts.sh ---
-
-test_build_base_qemu_args() {
-    source "${LIB_DIR}/qemu-opts.sh"
-    local tmpdir
-    tmpdir=$(mktemp -d)
-    local args
-    args=$(build_base_qemu_args "${tmpdir}/test.qcow2" "4G" "2" "2222" "${tmpdir}/qmp.sock" "${tmpdir}/vm.pid")
-
-    # Verify key arguments are present
-    local checks_ok=true
-    for expected in "-enable-kvm" "-cpu" "host" "-smp" "2" "-m" "4G" "-daemonize" "-nographic" "discard=unmap"; do
-        if ! echo "$args" | grep -qF -- "$expected"; then
-            fail "build_base_qemu_args contains '$expected'" "not found in output"
-            checks_ok=false
-            break
-        fi
-    done
-    if $checks_ok; then
-        pass "build_base_qemu_args contains all required flags"
-    fi
-
-    rm -rf "$tmpdir"
-}
-
-test_build_resume_qemu_args() {
-    source "${LIB_DIR}/qemu-opts.sh"
-    local tmpdir
-    tmpdir=$(mktemp -d)
-    local args
-    args=$(build_resume_qemu_args "${tmpdir}/test.qcow2" "4G" "2" "2222" "${tmpdir}/qmp.sock" "${tmpdir}/vm.pid" "claude-vm-state")
-
-    if echo "$args" | grep -q "\-loadvm" && echo "$args" | grep -q "claude-vm-state"; then
-        pass "build_resume_qemu_args includes -loadvm flag"
-    else
-        fail "build_resume_qemu_args includes -loadvm flag" "not found"
-    fi
-
-    rm -rf "$tmpdir"
-}
-
-test_build_virtiofs_qemu_args() {
-    source "${LIB_DIR}/qemu-opts.sh"
-    local args
-    args=$(build_virtiofs_qemu_args "/tmp/vfs.sock" "workspace")
-
-    if echo "$args" | grep -q "vhost-user-fs-pci" && echo "$args" | grep -q "workspace"; then
-        pass "build_virtiofs_qemu_args includes virtiofs device"
-    else
-        fail "build_virtiofs_qemu_args includes virtiofs device" "not found"
-    fi
-}
-
 # --- Run all tests ---
 
 echo ""
@@ -255,12 +202,6 @@ echo "Resume Logic Tests:"
 test_has_vm_state_missing_file
 test_build_resume_args_no_state
 test_elapsed_ms
-
-echo ""
-echo "QEMU Options Tests:"
-test_build_base_qemu_args
-test_build_resume_qemu_args
-test_build_virtiofs_qemu_args
 
 echo ""
 echo "=== Results: ${TESTS_PASSED}/${TESTS_RUN} passed, ${TESTS_FAILED} failed ==="

@@ -141,4 +141,3 @@ Rsync is incremental -- after the first launch, only changed files transfer.
 | `lib/wait-ready.sh` | SSH readiness polling |
 | `lib/boot-timer.sh` | Boot performance measurement |
 | `lib/claude-code.sh` | Claude Code verification, credential detection |
-| `lib/qemu-opts.sh` | QEMU argument builders |

@@ -18,7 +18,6 @@ lib/
   wait-ready.sh        SSH readiness polling
   boot-timer.sh        Boot performance measurement
   claude-code.sh       Claude Code verification and credentials
-  qemu-opts.sh         QEMU argument builders
 tests/
   test_*.sh            Test scripts (run directly with bash)
 docs/

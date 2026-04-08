@@ -40,7 +40,6 @@ Include-list for `~/.claude/`: settings, credentials, plugins, skills, mcp.json,
 | `lib/wait-ready.sh` | SSH readiness polling with exponential backoff |
 | `lib/boot-timer.sh` | Boot performance measurement |
 | `lib/claude-code.sh` | Claude Code verification, credential detection/forwarding |
-| `lib/qemu-opts.sh` | QEMU argument builders |
 
 ## Conventions
 
