@@ -71,7 +71,7 @@ First run builds a base image (~90s), creates a project snapshot, and launches t
 
 | Command | Description |
 |-|-|
-| `claude-vm` | Launch sandbox and enter Claude Code |
+| `claude-vm [-- ARGS...]` | Launch sandbox and enter Claude Code |
 | `claude-vm build [--flavor X]` | Build (or rebuild) the base image |
 | `claude-vm ssh` | Shell into the running VM |
 | `claude-vm stop [--all]` | Stop the VM (preserves snapshot) |
@@ -90,6 +90,7 @@ See [docs/usage.md](docs/usage.md) for the full reference with all flags and exa
 claude-vm config set VM_RAM 8G
 claude-vm config set VM_CPUS 4
 claude-vm config set FLAVOR debian
+claude-vm config set CLAUDE_ARGS "--dangerously-skip-permissions --model sonnet"
 ```
 
 Or edit directly:
@@ -99,6 +100,7 @@ Or edit directly:
 FLAVOR="debian"
 VM_RAM="8G"
 VM_CPUS="4"
+CLAUDE_ARGS="--dangerously-skip-permissions --model sonnet"
 ```
 
 Environment variables override config: `VM_RAM=16G claude-vm`

@@ -29,23 +29,23 @@ usage() {
 claude-vm — QEMU sandbox for Claude Code
 
 Usage:
-  claude-vm                     Launch sandbox and enter Claude Code
-  claude-vm build [--flavor X]  Build (or rebuild) the base image
-  claude-vm launch [DIR]        Launch sandbox for a specific directory
-  claude-vm ssh                 SSH shell into the running sandbox
-  claude-vm stop                Stop the running sandbox (preserves snapshot)
-  claude-vm stop --all          Stop all running sandboxes
-  claude-vm reset               Reset project snapshot (fresh from base)
-  claude-vm destroy             Remove all sandbox artifacts for this project
-  claude-vm destroy --all       Remove ALL claude-vm data (base + all snapshots)
-  claude-vm list                List all project snapshots
-  claude-vm status              Show status of current project's sandbox
-  claude-vm show                Show full QEMU and SSH commands for this project
-  claude-vm config              Show effective configuration
-  claude-vm config set KEY VAL  Set a config value (e.g., VM_RAM=8G)
-  claude-vm config get KEY      Get a config value
-  claude-vm config edit         Open config file in $EDITOR
-  claude-vm help                Show this help
+  claude-vm [-- ARGS...]              Launch sandbox and enter Claude Code
+  claude-vm build [--flavor X]        Build (or rebuild) the base image
+  claude-vm launch [DIR] [-- ARGS...] Launch sandbox for a specific directory
+  claude-vm ssh                       SSH shell into the running sandbox
+  claude-vm stop                      Stop the running sandbox (preserves snapshot)
+  claude-vm stop --all                Stop all running sandboxes
+  claude-vm reset                     Reset project snapshot (fresh from base)
+  claude-vm destroy                   Remove all sandbox artifacts for this project
+  claude-vm destroy --all             Remove ALL claude-vm data (base + all snapshots)
+  claude-vm list                      List all project snapshots
+  claude-vm status                    Show status of current project's sandbox
+  claude-vm show                      Show full QEMU and SSH commands for this project
+  claude-vm config                    Show effective configuration
+  claude-vm config set KEY VAL        Set a config value (e.g., VM_RAM=8G)
+  claude-vm config get KEY            Get a config value
+  claude-vm config edit               Open config file in $EDITOR
+  claude-vm help                      Show this help
 
 Flavors:
   debian (default)              Debian 13 (trixie) genericcloud — minimal, no snapd
@@ -63,6 +63,9 @@ Configuration:
     VM_CPUS         CPU cores (default: 2)
     SSH_PORT_BASE   Starting SSH port (default: 10022)
     FORWARD_PORTS   Extra ports to forward (e.g., 8080,3000:3000,9000-9002)
+    CLAUDE_ARGS     Args passed to claude (default: --dangerously-skip-permissions)
+
+  Args after -- are appended to CLAUDE_ARGS (e.g., claude-vm -- --model sonnet)
 
   Priority: defaults < config file < environment variables
 
@@ -73,6 +76,7 @@ Environment:
   VM_RAM                        Override RAM (e.g., VM_RAM=8G claude-vm)
   VM_CPUS                       Override CPUs (e.g., VM_CPUS=4 claude-vm)
   FORWARD_PORTS                 Extra port forwards (e.g., FORWARD_PORTS=8080 claude-vm)
+  CLAUDE_ARGS                   Override claude args (default: --dangerously-skip-permissions)
 
 EOF
 }
@@ -116,6 +120,7 @@ cmd_config() {
                 VM_CPUS) echo "$VM_CPUS" ;;
                 SSH_PORT_BASE) echo "$SSH_PORT_BASE" ;;
                 FORWARD_PORTS) get_project_forward_ports "$PWD" ;;
+                CLAUDE_ARGS) echo "$CLAUDE_ARGS" ;;
                 BASE_IMAGE_URL) echo "$BASE_IMAGE_URL" ;;
                 BASE_IMAGE_NAME) echo "$BASE_IMAGE_NAME" ;;
                 *)
@@ -214,9 +219,23 @@ cmd_build() {
 }
 
 # Launch/default command
+# Args: [DIR] [-- claude-args...]
 cmd_launch() {
-    local project_dir="${1:-$PWD}"
-    launch_vm "$project_dir"
+    local project_dir="$PWD"
+    local claude_args=()
+    local seen_separator=false
+    for arg in "$@"; do
+        if [[ "$arg" == "--" ]]; then
+            seen_separator=true
+            continue
+        fi
+        if $seen_separator; then
+            claude_args+=("$arg")
+        else
+            project_dir="$arg"
+        fi
+    done
+    launch_vm "$project_dir" "${claude_args[@]}"
 }
 
 # SSH command

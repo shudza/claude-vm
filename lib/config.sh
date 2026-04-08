@@ -15,6 +15,7 @@ DEFAULT_SSH_PORT_BASE="10022"
 DEFAULT_FLAVOR="debian"
 DEFAULT_VM_USER="$USER"
 DEFAULT_FORWARD_PORTS=""
+DEFAULT_CLAUDE_ARGS="--dangerously-skip-permissions"
 
 # ── Flavor registry ──────────────────────────────────────────────────────────
 # Each flavor defines: image URL, image filename, package manager family
@@ -85,6 +86,7 @@ load_config() {
     local _env_image_name="${BASE_IMAGE_NAME:-}"
     local _env_vm_user="${VM_USER:-}"
     local _env_forward_ports="${FORWARD_PORTS:-}"
+    local _env_claude_args="${CLAUDE_ARGS:-}"
 
     # Start with defaults
     VM_RAM="$DEFAULT_RAM"
@@ -93,6 +95,7 @@ load_config() {
     FLAVOR="$DEFAULT_FLAVOR"
     VM_USER="$DEFAULT_VM_USER"
     FORWARD_PORTS="$DEFAULT_FORWARD_PORTS"
+    CLAUDE_ARGS="$DEFAULT_CLAUDE_ARGS"
 
     # Override from config file if it exists
     if [[ -f "$CLAUDE_VM_CONFIG" ]]; then
@@ -107,6 +110,7 @@ load_config() {
     [[ -n "$_env_flavor" ]] && FLAVOR="$_env_flavor"
     [[ -n "$_env_vm_user" ]] && VM_USER="$_env_vm_user"
     [[ -n "$_env_forward_ports" ]] && FORWARD_PORTS="$_env_forward_ports"
+    [[ -n "$_env_claude_args" ]] && CLAUDE_ARGS="$_env_claude_args"
 
     # Derive image URL/name from flavor (explicit overrides still win)
     if is_valid_flavor "$FLAVOR"; then
@@ -143,6 +147,7 @@ show_config() {
     echo "BASE_IMAGE_URL=\"$BASE_IMAGE_URL\"  # derived from FLAVOR"
     echo "BASE_IMAGE_NAME=\"$BASE_IMAGE_NAME\"  # derived from FLAVOR"
     echo "FORWARD_PORTS=\"$(get_project_forward_ports "$PWD")\"  # per-project"
+    echo "CLAUDE_ARGS=\"$CLAUDE_ARGS\""
 }
 
 # Set a config key=value in the config file
@@ -152,10 +157,10 @@ set_config_value() {
 
     # Validate key is a known config option
     case "$key" in
-        FLAVOR|VM_USER|VM_RAM|VM_CPUS|SSH_PORT_BASE|BASE_IMAGE_URL|BASE_IMAGE_NAME|FORWARD_PORTS) ;;
+        FLAVOR|VM_USER|VM_RAM|VM_CPUS|SSH_PORT_BASE|BASE_IMAGE_URL|BASE_IMAGE_NAME|FORWARD_PORTS|CLAUDE_ARGS) ;;
         *)
             echo "Unknown config key: $key" >&2
-            echo "Valid keys: FLAVOR, VM_USER, VM_RAM, VM_CPUS, SSH_PORT_BASE, BASE_IMAGE_URL, BASE_IMAGE_NAME, FORWARD_PORTS" >&2
+            echo "Valid keys: FLAVOR, VM_USER, VM_RAM, VM_CPUS, SSH_PORT_BASE, BASE_IMAGE_URL, BASE_IMAGE_NAME, FORWARD_PORTS, CLAUDE_ARGS" >&2
             return 1
             ;;
     esac

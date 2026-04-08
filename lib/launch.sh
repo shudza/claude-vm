@@ -30,18 +30,17 @@ _build_ssh_cmd() {
 }
 
 # Connect to a running VM — launches Claude Code by default
-# Args: $1 = SSH port, $2 = command (optional, default: claude code)
+# Args: $1 = SSH port, remaining args passed to claude
 connect_vm() {
     local port="$1"
     shift
     _build_ssh_cmd "$port"
+    local claude_args="$CLAUDE_ARGS"
     if [[ $# -gt 0 ]]; then
-        exec "${_ssh_cmd[@]}" "$@"
-    else
-        # Launch Claude Code with full sandbox permissions
-        exec "${_ssh_cmd[@]}" -t \
-            "export PATH=\"\$HOME/.local/bin:\$PATH\"; export COLORTERM=truecolor; cd /workspace 2>/dev/null; [ -f ~/.env ] && . ~/.env; exec claude --dangerously-skip-permissions"
+        claude_args="$claude_args $*"
     fi
+    exec "${_ssh_cmd[@]}" -t \
+        "export PATH=\"\$HOME/.local/bin:\$PATH\"; export COLORTERM=truecolor; cd /workspace 2>/dev/null; [ -f ~/.env ] && . ~/.env; exec claude $claude_args"
 }
 
 # Connect to a running VM shell (no Claude Code)
@@ -257,6 +256,8 @@ _build_qemu_args() {
 # This is the main entry point for `claude-vm` (no subcommand)
 launch_vm() {
     local project_dir="${1:-$PWD}"
+    shift 2>/dev/null || true
+    local claude_extra_args=("$@")
     local start_time
     start_time=$(date +%s)
 
@@ -273,7 +274,7 @@ launch_vm() {
         local ssh_port
         ssh_port="$(get_project_ssh_port "$project_dir")"
         ui_info "Attaching to running VM..."
-        connect_vm "$ssh_port"
+        connect_vm "$ssh_port" "${claude_extra_args[@]}"
     fi
 
     # First launch in this directory — explain and confirm
@@ -346,7 +347,7 @@ launch_vm() {
     ui_done "Ready in ${elapsed}s — $(basename "$project_dir")"
 
     # Drop into Claude Code
-    connect_vm "$ssh_port"
+    connect_vm "$ssh_port" "${claude_extra_args[@]}"
 }
 
 # Start virtiofsd for a project directory

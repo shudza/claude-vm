@@ -23,7 +23,7 @@ trap 'rm -rf "$TEST_DIR"' EXIT
 
 # Helper: reset config state for each test
 _reset_config_env() {
-    unset VM_RAM VM_CPUS SSH_PORT_BASE BASE_IMAGE_URL BASE_IMAGE_NAME 2>/dev/null || true
+    unset VM_RAM VM_CPUS SSH_PORT_BASE BASE_IMAGE_URL BASE_IMAGE_NAME CLAUDE_ARGS 2>/dev/null || true
 }
 
 # ─── Tests ────────────────────────────────────────────────────────────────────
@@ -404,6 +404,89 @@ EOF
     _reset_config_env
 }
 
+test_default_claude_args() {
+    _reset_config_env
+    unset CLAUDE_ARGS 2>/dev/null || true
+    export CLAUDE_VM_DIR="$TEST_DIR/test-claude-args-default"
+    export CLAUDE_VM_CONFIG="$CLAUDE_VM_DIR/config"
+
+    source "$PROJECT_DIR/lib/config.sh"
+    load_config
+
+    if [[ "$CLAUDE_ARGS" == "--dangerously-skip-permissions" ]]; then
+        pass "default CLAUDE_ARGS is --dangerously-skip-permissions"
+    else
+        fail "default CLAUDE_ARGS" "expected --dangerously-skip-permissions, got $CLAUDE_ARGS"
+    fi
+    _reset_config_env
+    unset CLAUDE_ARGS 2>/dev/null || true
+}
+
+test_claude_args_config_override() {
+    _reset_config_env
+    unset CLAUDE_ARGS 2>/dev/null || true
+    export CLAUDE_VM_DIR="$TEST_DIR/test-claude-args-config"
+    export CLAUDE_VM_CONFIG="$CLAUDE_VM_DIR/config"
+
+    mkdir -p "$CLAUDE_VM_DIR"
+    cat > "$CLAUDE_VM_CONFIG" << 'EOF'
+CLAUDE_ARGS="--dangerously-skip-permissions --model sonnet"
+EOF
+
+    source "$PROJECT_DIR/lib/config.sh"
+    load_config
+
+    if [[ "$CLAUDE_ARGS" == "--dangerously-skip-permissions --model sonnet" ]]; then
+        pass "config file overrides CLAUDE_ARGS"
+    else
+        fail "config file CLAUDE_ARGS override" "expected '--dangerously-skip-permissions --model sonnet', got '$CLAUDE_ARGS'"
+    fi
+    _reset_config_env
+    unset CLAUDE_ARGS 2>/dev/null || true
+}
+
+test_claude_args_env_override() {
+    _reset_config_env
+    export CLAUDE_VM_DIR="$TEST_DIR/test-claude-args-env"
+    export CLAUDE_VM_CONFIG="$CLAUDE_VM_DIR/config"
+
+    mkdir -p "$CLAUDE_VM_DIR"
+    cat > "$CLAUDE_VM_CONFIG" << 'EOF'
+CLAUDE_ARGS="--dangerously-skip-permissions"
+EOF
+
+    export CLAUDE_ARGS="--dangerously-skip-permissions --verbose"
+
+    source "$PROJECT_DIR/lib/config.sh"
+    load_config
+
+    if [[ "$CLAUDE_ARGS" == "--dangerously-skip-permissions --verbose" ]]; then
+        pass "env var CLAUDE_ARGS overrides config file"
+    else
+        fail "env var CLAUDE_ARGS override" "expected '--dangerously-skip-permissions --verbose', got '$CLAUDE_ARGS'"
+    fi
+    _reset_config_env
+    unset CLAUDE_ARGS 2>/dev/null || true
+}
+
+test_set_config_claude_args() {
+    _reset_config_env
+    unset CLAUDE_ARGS 2>/dev/null || true
+    export CLAUDE_VM_DIR="$TEST_DIR/test-set-claude-args"
+    export CLAUDE_VM_CONFIG="$CLAUDE_VM_DIR/config"
+
+    source "$PROJECT_DIR/lib/config.sh"
+    set_config_value "CLAUDE_ARGS" "--dangerously-skip-permissions --model opus" >/dev/null
+
+    if grep -q 'CLAUDE_ARGS="--dangerously-skip-permissions --model opus"' "$CLAUDE_VM_CONFIG"; then
+        pass "set_config_value accepts CLAUDE_ARGS"
+    else
+        fail "set_config_value CLAUDE_ARGS" "value not found in config file"
+    fi
+    _reset_config_env
+    unset CLAUDE_ARGS 2>/dev/null || true
+}
+
 # ─── Run ──────────────────────────────────────────────────────────────────────
 
 echo "=== claude-vm config tests ==="
@@ -422,6 +505,10 @@ run_test test_set_config_validates_cpu_count
 run_test test_show_config_output
 run_test test_launch_uses_config_values
 run_test test_config_priority_full_chain
+run_test test_default_claude_args
+run_test test_claude_args_config_override
+run_test test_claude_args_env_override
+run_test test_set_config_claude_args
 
 echo ""
 echo "Results: ${TESTS_PASSED} passed, ${TESTS_FAILED} failed, ${TESTS_RUN} total"

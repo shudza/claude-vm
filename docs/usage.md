@@ -20,6 +20,7 @@ If the VM is already running, attaches a new Claude Code instance to the existin
 
 ```bash
 claude-vm
+claude-vm -- --model sonnet         # Pass extra args to claude
 ```
 
 ### `claude-vm build`
@@ -43,6 +44,7 @@ Launch a sandbox for a specific directory.
 
 ```bash
 claude-vm launch /path/to/project
+claude-vm launch /path/to/project -- --model sonnet   # With extra claude args
 ```
 
 ### `claude-vm ssh`
@@ -185,6 +187,7 @@ FLAVOR="debian"
 VM_RAM="8G"
 VM_CPUS="4"
 SSH_PORT_BASE="10022"
+CLAUDE_ARGS="--dangerously-skip-permissions --model sonnet"
 ```
 
 ### Config Keys
@@ -198,6 +201,7 @@ SSH_PORT_BASE="10022"
 | `BASE_IMAGE_URL` | (from flavor) | URL | Cloud image download URL |
 | `BASE_IMAGE_NAME` | (from flavor) | Filename | Cloud image filename |
 | `FORWARD_PORTS` | (none) | Comma-separated port specs | Extra ports to forward (per-project) |
+| `CLAUDE_ARGS` | `--dangerously-skip-permissions` | Free-form string | Args passed to `claude` inside the VM |
 
 ### Priority
 
@@ -217,6 +221,7 @@ defaults < config file < environment variables
 | `BASE_IMAGE_URL` | Override cloud image URL |
 | `BASE_IMAGE_NAME` | Override cloud image filename |
 | `FORWARD_PORTS` | Extra port forwards (see Port Forwarding below) |
+| `CLAUDE_ARGS` | Override args passed to `claude` (default: `--dangerously-skip-permissions`) |
 | `CLAUDE_VM_VERBOSE` | Set to `true` to show all output (no spinner) |
 | `CLAUDE_VM_QUIET` | Set to `true` to suppress spinner |
 
@@ -353,6 +358,12 @@ claude-vm
 
 # Nuclear option: remove everything
 claude-vm destroy --all
+
+# Pass extra args to claude
+claude-vm -- --model sonnet
+
+# Override default claude args via config
+claude-vm config set CLAUDE_ARGS "--dangerously-skip-permissions --model sonnet"
 
 # Debug a launch issue
 CLAUDE_VM_VERBOSE=true claude-vm
