@@ -133,11 +133,6 @@ Rsync is incremental -- after the first launch, only changed files transfer.
 | `lib/cloud-init.sh` | Cloud-init ISO generation, flavor-specific packages/runcmd |
 | `lib/launch.sh` | VM launch, SSH connection, config sync |
 | `lib/shutdown.sh` | Graceful shutdown, state save, cleanup |
-| `lib/snapshot.sh` | Linked snapshot create/verify/list/delete |
-| `lib/virtiofs.sh` | virtiofsd management, guest mount verification |
-| `lib/ssh.sh` | SSH key management, connectivity checks |
+| `lib/snapshot.sh` | Linked snapshot creation, backing chain verification, deletion |
+| `lib/virtiofs.sh` | virtiofsd binary detection, guest mount management |
 | `lib/ui.sh` | Spinner, log capture, status output |
-| `lib/resume.sh` | VM state save/load for fast resume |
-| `lib/wait-ready.sh` | SSH readiness polling |
-| `lib/boot-timer.sh` | Boot performance measurement |
-| `lib/claude-code.sh` | Claude Code verification, credential detection |

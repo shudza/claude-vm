@@ -356,9 +356,3 @@ base_image_exists() {
     [[ -f "$base_img" ]] && qemu-img check "$base_img" &>/dev/null
 }
 
-# Check if project snapshot exists
-project_snapshot_exists() {
-    local snap
-    snap="$(project_snapshot_path "${1:-$PWD}")"
-    [[ -f "$snap" ]]
-}

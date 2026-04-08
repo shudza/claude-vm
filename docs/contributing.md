@@ -10,14 +10,9 @@ lib/
   cloud-init.sh        Cloud-init generation (flavor-dispatched)
   launch.sh            VM launch, SSH connection, config sync
   shutdown.sh          Graceful shutdown with state preservation
-  snapshot.sh          Linked snapshot management
-  virtiofs.sh          virtiofsd and guest mount management
-  ssh.sh               SSH key management and connectivity
+  snapshot.sh          Linked snapshot creation, verification, deletion
+  virtiofs.sh          virtiofsd binary detection, guest mount management
   ui.sh                Spinner, log capture, status output
-  resume.sh            VM state save/load for fast resume
-  wait-ready.sh        SSH readiness polling
-  boot-timer.sh        Boot performance measurement
-  claude-code.sh       Claude Code verification and credentials
 tests/
   test_*.sh            Test scripts (run directly with bash)
 docs/

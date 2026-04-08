@@ -8,9 +8,8 @@
 # 2. shutdown_vm cleans up runtime artifacts (PID files, sockets)
 # 3. shutdown_vm handles already-stopped VMs gracefully
 # 4. shutdown_vm handles stale PID files
-# 5. verify_snapshot_preserved detects missing/empty/valid snapshots
-# 6. _cleanup_runtime removes only runtime files, not snapshots
-# 7. shutdown_vm stops virtiofsd process
+# 5. _cleanup_runtime removes only runtime files, not snapshots
+# 6. shutdown_vm stops virtiofsd process
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -192,44 +191,10 @@ test_shutdown_stale_pid() {
 }
 
 # ============================================================================
-# Test 5: verify_snapshot_preserved
-# ============================================================================
-test_verify_snapshot() {
-    echo "Test 5: verify_snapshot_preserved detects states"
-    setup_test_env
-    local ok=true
-
-    # Missing snapshot
-    if verify_snapshot_preserved "/tmp/nonexistent-$$" >/dev/null 2>&1; then
-        fail "Should fail for missing snapshot"; ok=false
-    fi
-
-    # Empty snapshot
-    local project_dir="/tmp/test-shut5-$$"
-    local snap_path
-    snap_path="$(project_snapshot_path "$project_dir")"
-    mkdir -p "$(dirname "$snap_path")"
-    touch "$snap_path"
-    if verify_snapshot_preserved "$project_dir" >/dev/null 2>&1; then
-        fail "Should fail for empty snapshot"; ok=false
-    fi
-
-    # Valid snapshot
-    dd if=/dev/urandom of="$snap_path" bs=1024 count=16 2>/dev/null
-    if ! verify_snapshot_preserved "$project_dir" >/dev/null 2>&1; then
-        fail "Should succeed for valid snapshot"; ok=false
-    fi
-
-    $ok && pass "Correctly detects missing/empty/valid snapshots"
-
-    teardown_test_env
-}
-
-# ============================================================================
-# Test 6: _cleanup_runtime does NOT delete snapshot
+# Test 5: _cleanup_runtime does NOT delete snapshot
 # ============================================================================
 test_cleanup_spares_snapshot() {
-    echo "Test 6: _cleanup_runtime preserves snapshot"
+    echo "Test 5: _cleanup_runtime preserves snapshot"
     setup_test_env
 
     local project_dir="/tmp/test-shut6-$$"
@@ -255,10 +220,10 @@ test_cleanup_spares_snapshot() {
 }
 
 # ============================================================================
-# Test 7: shutdown kills virtiofsd
+# Test 6: shutdown kills virtiofsd
 # ============================================================================
 test_shutdown_stops_virtiofsd() {
-    echo "Test 7: Shutdown stops virtiofsd"
+    echo "Test 6: Shutdown stops virtiofsd"
     setup_test_env
 
     local project_dir="/tmp/test-shut7-$$"
@@ -563,7 +528,6 @@ test_shutdown_preserves_snapshot
 test_shutdown_cleans_runtime
 test_shutdown_already_stopped
 test_shutdown_stale_pid
-test_verify_snapshot
 test_cleanup_spares_snapshot
 test_shutdown_stops_virtiofsd
 test_stop_by_run_dir_with_sidecar

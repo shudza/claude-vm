@@ -24,7 +24,7 @@ ACPI_SHUTDOWN_TIMEOUT=15     # seconds to wait for ACPI shutdown
 FORCE_KILL_GRACE=2           # seconds between SIGTERM and SIGKILL
 SAVEVM_TIMEOUT=10            # seconds to wait for savevm to complete
 
-# VM state tag for fast resume (must match resume.sh)
+# VM state tag for fast resume
 VM_STATE_TAG="claude-vm-state"
 
 # Send a command to the QEMU HMP monitor
@@ -319,32 +319,3 @@ _cleanup_runtime() {
     # The run directory itself is kept (logs may be useful)
 }
 
-# Quick check: is the snapshot file present and non-empty?
-# Used to verify shutdown didn't corrupt anything.
-# Args: $1 = project directory
-verify_snapshot_preserved() {
-    local project_dir="${1:-$PWD}"
-
-    if [[ -z "${CLAUDE_VM_DIR:-}" ]]; then
-        source "$SCRIPT_DIR/config.sh"
-        load_config
-    fi
-
-    local snap_path
-    snap_path="$(project_snapshot_path "$project_dir")"
-
-    if [[ ! -f "$snap_path" ]]; then
-        echo "FAIL: Snapshot not found: $snap_path" >&2
-        return 1
-    fi
-
-    local size
-    size=$(stat -c%s "$snap_path" 2>/dev/null || echo 0)
-    if (( size == 0 )); then
-        echo "FAIL: Snapshot is empty: $snap_path" >&2
-        return 1
-    fi
-
-    echo "OK: Snapshot intact ($snap_path, $(numfmt --to=iec "$size" 2>/dev/null || echo "${size}B"))"
-    return 0
-}

@@ -3,10 +3,9 @@
 #
 # Tests cover:
 #   1. virtiofsd binary detection
-#   2. virtiofsd daemon lifecycle (start/stop)
-#   3. QEMU argument generation
+#   2. Constants (mount tag, guest mount path)
+#   3. Cloud-init integration (fstab, mkdir, mount tag)
 #   4. Guest mount verification (requires running VM)
-#   5. Read/write round-trip correctness
 #
 # Unit tests (no VM required) run by default.
 # Integration tests (require running VM) run with: --integration
@@ -56,148 +55,12 @@ test_find_daemon() {
     fi
 }
 
-test_qemu_args_contains_memfd() {
-    local args
-    args=$(virtiofs_qemu_args "/tmp/test.sock" "4G")
-    echo "$args" | grep -q "memory-backend-memfd"
-}
-
-test_qemu_args_contains_share_on() {
-    local args
-    args=$(virtiofs_qemu_args "/tmp/test.sock" "4G")
-    echo "$args" | grep -q "share=on"
-}
-
-test_qemu_args_contains_chardev() {
-    local args
-    args=$(virtiofs_qemu_args "/tmp/test.sock" "4G")
-    echo "$args" | grep -q "socket,id=vhost-fs,path=/tmp/test.sock"
-}
-
-test_qemu_args_contains_device() {
-    local args
-    args=$(virtiofs_qemu_args "/tmp/test.sock" "4G")
-    echo "$args" | grep -q "vhost-user-fs-pci,chardev=vhost-fs,tag=workspace"
-}
-
-test_qemu_args_queue_size() {
-    local args
-    args=$(virtiofs_qemu_args "/tmp/test.sock" "4G")
-    echo "$args" | grep -q "queue-size=1024"
-}
-
-test_qemu_args_custom_ram() {
-    local args
-    args=$(virtiofs_qemu_args "/tmp/test.sock" "8G")
-    echo "$args" | grep -q "size=8G"
-}
-
 test_mount_tag_constant() {
     [[ "$VIRTIOFS_MOUNT_TAG" == "workspace" ]]
 }
 
 test_guest_mount_constant() {
     [[ "$VIRTIOFS_GUEST_MOUNT" == "/workspace" ]]
-}
-
-test_start_daemon_rejects_missing_dir() {
-    local tmpdir
-    tmpdir=$(mktemp -d)
-    local bad_dir="/tmp/claude-vm-test-nonexistent-$$"
-    rm -rf "$bad_dir"
-
-    # Should fail with nonexistent directory
-    if virtiofs_start_daemon "$bad_dir" "$tmpdir/test.sock" "$tmpdir" 2>/dev/null; then
-        rm -rf "$tmpdir"
-        return 1  # Should have failed
-    fi
-
-    rm -rf "$tmpdir"
-    return 0
-}
-
-test_stop_daemon_handles_no_pid() {
-    local tmpdir
-    tmpdir=$(mktemp -d)
-    # Should succeed gracefully when no PID file exists
-    virtiofs_stop_daemon "$tmpdir"
-    local rc=$?
-    rm -rf "$tmpdir"
-    return $rc
-}
-
-test_is_running_returns_false_no_pid() {
-    local tmpdir
-    tmpdir=$(mktemp -d)
-    if virtiofs_is_running "$tmpdir"; then
-        rm -rf "$tmpdir"
-        return 1  # Should not be running
-    fi
-    rm -rf "$tmpdir"
-    return 0
-}
-
-test_is_running_returns_false_stale_pid() {
-    local tmpdir
-    tmpdir=$(mktemp -d)
-    # Write a PID that doesn't exist
-    echo "999999999" > "$tmpdir/virtiofsd.pid"
-    if virtiofs_is_running "$tmpdir"; then
-        rm -rf "$tmpdir"
-        return 1  # Should not be running with stale PID
-    fi
-    rm -rf "$tmpdir"
-    return 0
-}
-
-# ─── Daemon Lifecycle Test (requires virtiofsd) ────────────────────────────
-
-test_daemon_lifecycle() {
-    local virtiofsd_bin
-    if ! virtiofsd_bin=$(virtiofs_find_daemon 2>/dev/null); then
-        skip "virtiofsd not installed — skipping lifecycle test"
-        return 0
-    fi
-
-    local tmpdir share_dir
-    tmpdir=$(mktemp -d)
-    share_dir=$(mktemp -d)
-    local sock_path="$tmpdir/virtiofs.sock"
-
-    # Create a test file in share dir
-    echo "hello from host" > "$share_dir/testfile.txt"
-
-    # Start daemon
-    if ! virtiofs_start_daemon "$share_dir" "$sock_path" "$tmpdir" 2>/dev/null; then
-        echo "    (virtiofsd failed to start — may need root or different caps)" >&2
-        rm -rf "$tmpdir" "$share_dir"
-        skip "virtiofsd could not start (permissions?)"
-        return 0
-    fi
-
-    # Verify it's running
-    if ! virtiofs_is_running "$tmpdir"; then
-        rm -rf "$tmpdir" "$share_dir"
-        return 1
-    fi
-
-    # Verify socket exists
-    if [[ ! -S "$sock_path" ]]; then
-        rm -rf "$tmpdir" "$share_dir"
-        return 1
-    fi
-
-    # Stop daemon
-    virtiofs_stop_daemon "$tmpdir"
-
-    # Verify it stopped
-    if virtiofs_is_running "$tmpdir"; then
-        rm -rf "$tmpdir" "$share_dir"
-        return 1
-    fi
-
-    rm -rf "$tmpdir" "$share_dir"
-    return 0
 }
 
 # ─── Cloud-init fstab Test ──────────────────────────────────────────────────
@@ -221,14 +84,7 @@ test_cloud_init_mount_tag_matches() {
 
 test_integration_mount_exists() {
     local ssh_port="$1"
-    virtiofs_is_mounted "$ssh_port"
-}
-
-test_integration_read_write_roundtrip() {
-    local ssh_port="$1"
-    local project_dir="$2"
-
-    virtiofs_verify_mount "$ssh_port" "$project_dir"
+    virtiofs_ensure_mounted "$ssh_port" 2>/dev/null
 }
 
 test_integration_large_file() {
@@ -326,22 +182,11 @@ run_unit_tests() {
     echo ""
 
     run_test "find virtiofsd binary" test_find_daemon
-    run_test "QEMU args include memfd backend" test_qemu_args_contains_memfd
-    run_test "QEMU args include share=on" test_qemu_args_contains_share_on
-    run_test "QEMU args include chardev socket" test_qemu_args_contains_chardev
-    run_test "QEMU args include vhost-user-fs device" test_qemu_args_contains_device
-    run_test "QEMU args include queue-size" test_qemu_args_queue_size
-    run_test "QEMU args respect custom RAM" test_qemu_args_custom_ram
     run_test "mount tag is 'workspace'" test_mount_tag_constant
     run_test "guest mount is '/workspace'" test_guest_mount_constant
-    run_test "rejects nonexistent shared dir" test_start_daemon_rejects_missing_dir
-    run_test "stop handles missing PID gracefully" test_stop_daemon_handles_no_pid
-    run_test "is_running false with no PID" test_is_running_returns_false_no_pid
-    run_test "is_running false with stale PID" test_is_running_returns_false_stale_pid
     run_test "cloud-init has virtiofs fstab" test_cloud_init_has_virtiofs_fstab
     run_test "cloud-init creates /workspace" test_cloud_init_has_workspace_mkdir
     run_test "cloud-init mount tag matches" test_cloud_init_mount_tag_matches
-    run_test "daemon start/stop lifecycle" test_daemon_lifecycle
 }
 
 run_integration_tests() {
@@ -372,7 +217,6 @@ run_integration_tests() {
     virtiofs_ensure_mounted "$ssh_port" 2>/dev/null || true
 
     run_test "virtiofs is mounted" test_integration_mount_exists "$ssh_port"
-    run_test "read/write round-trip" test_integration_read_write_roundtrip "$ssh_port" "$project_dir"
     run_test "large file checksum (1MB)" test_integration_large_file "$ssh_port" "$project_dir"
     run_test "symlinks traversal" test_integration_symlinks "$ssh_port" "$project_dir"
     run_test "guest creates directory on host" test_integration_guest_creates_directory "$ssh_port" "$project_dir"

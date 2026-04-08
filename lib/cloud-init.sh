@@ -146,13 +146,12 @@ $gh_runcmd
   - systemctl enable $ssh_service
   - systemctl start $ssh_service
   # Done
+  - echo "claude-vm-ready" > /dev/console
   - touch /var/lib/cloud/instance/claude-vm-ready
   # Cleanup (flavor-specific)
 $cleanup_runcmd
   # Disable cloud-init on subsequent boots (provisioning is done)
   - touch /etc/cloud/cloud-init.disabled
-  # Reclaim freed disk space so the base image qcow2 stays compact
-  - fstrim -av || true
 
 power_state:
   mode: poweroff

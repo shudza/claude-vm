@@ -123,13 +123,6 @@ ui_warn() {
     printf '  \033[33m⚠ %s\033[0m\n' "$msg" >&2
 }
 
-# Print an error with log tail
-ui_error() {
-    local msg="$1"
-    printf '  \033[31m✗ %s\033[0m\n' "$msg" >&2
-    _ui_show_error 1
-}
-
 # ── Internal ─────────────────────────────────────────────────────────────────
 
 _ui_show_error() {

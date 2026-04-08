@@ -32,14 +32,9 @@ Include-list for `~/.claude/`: settings, credentials, plugins, skills, mcp.json,
 | `lib/cloud-init.sh` | Cloud-init ISO generation, flavor-specific packages/runcmd |
 | `lib/launch.sh` | VM launch, SSH connection, virtiofsd start, config sync |
 | `lib/shutdown.sh` | Graceful shutdown, state save, cleanup |
-| `lib/snapshot.sh` | Linked snapshot CRUD, backing chain verification |
-| `lib/virtiofs.sh` | virtiofsd lifecycle, QEMU args, guest mount verification |
-| `lib/ssh.sh` | SSH key management, connectivity checks, session helpers |
+| `lib/snapshot.sh` | Linked snapshot creation, backing chain verification, deletion |
+| `lib/virtiofs.sh` | virtiofsd binary detection, guest mount management |
 | `lib/ui.sh` | Spinner, phase execution with log capture, status messages |
-| `lib/resume.sh` | savevm/loadvm for fast resume |
-| `lib/wait-ready.sh` | SSH readiness polling with exponential backoff |
-| `lib/boot-timer.sh` | Boot performance measurement |
-| `lib/claude-code.sh` | Claude Code verification, credential detection/forwarding |
 
 ## Conventions
 
@@ -52,6 +47,7 @@ Include-list for `~/.claude/`: settings, credentials, plugins, skills, mcp.json,
 - Never `echo` directly in launch/shutdown code paths
 - Error messages to stderr (`>&2`). Technical details to log file, not terminal
 - Snapshot file is **never** deleted during shutdown/error. Only `reset`/`destroy` remove snapshots
+- When adding new features always write tests and update documentation files
 
 **Adding a command:** `cmd_<name>` function in `claude-vm` → case in `main()` → usage line in `usage()`
 

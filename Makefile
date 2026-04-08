@@ -24,11 +24,11 @@ test: test-unit test-e2e
 
 test-unit:
 	@for t in tests/test_*.sh; do \
-		case "$$t" in tests/test_e2e_*) continue;; esac; \
+		case "$$t" in tests/test_e2e*) continue;; esac; \
 		echo "--- $$t ---"; bash "$$t" || exit 1; \
 	done
 
 test-e2e:
-	@for t in tests/test_e2e_*.sh; do \
+	@for t in tests/test_e2e*.sh; do \
 		echo "--- $$t ---"; bash "$$t" || exit 1; \
 	done

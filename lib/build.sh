@@ -252,13 +252,27 @@ provision_base_image() {
     echo "  Waiting for cloud-init to complete and VM to power off..."
 
     # Wait for QEMU to exit (cloud-init powers off the VM)
-    local wait_start
+    local wait_start ready_seen=false ready_at=0
     wait_start=$(date +%s)
 
     while kill -0 "$qemu_pid" 2>/dev/null; do
         local now
         now=$(date +%s)
         local waited=$(( now - wait_start ))
+
+        # Detect cloud-init ready signal in serial log
+        if ! $ready_seen && [[ -f "$serial_log" ]] && grep -q "claude-vm-ready\|provisioning complete" "$serial_log" 2>/dev/null; then
+            ready_seen=true
+            ready_at=$waited
+            echo "  Cloud-init finished (${waited}s), waiting for VM to power off..."
+        fi
+
+        # If cloud-init finished but VM hasn't powered off within 60s, force kill
+        if $ready_seen && (( waited - ready_at > 60 )); then
+            echo "  VM did not power off within 60s after provisioning, forcing shutdown..."
+            kill "$qemu_pid" 2>/dev/null || true
+            break
+        fi
 
         # Show progress every 10 seconds
         if (( waited % 10 == 0 )) && (( waited > 0 )); then
@@ -289,12 +303,6 @@ provision_base_image() {
         echo "WARNING: Base image seems small ($(( img_size / 1048576 ))MB). Provisioning may have failed." >&2
         echo "         Check serial log: $serial_log" >&2
     fi
-}
-
-# Filter and display provisioning log output
-tail_provision_log() {
-    # Just consume stdout from QEMU to prevent blocking
-    cat > /dev/null
 }
 
 # Note: create_project_snapshot is provided by snapshot.sh (sourced above)

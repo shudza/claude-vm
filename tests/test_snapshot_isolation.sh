@@ -7,9 +7,13 @@
 #   3. Snapshot creation is idempotent (re-running doesn't overwrite)
 #   4. Operations on one project's snapshot don't affect another's
 #   5. Snapshot verification detects valid/invalid states
-#   6. Base image safety check warns when snapshots exist
 
 set -euo pipefail
+
+if ! command -v qemu-img &>/dev/null; then
+    echo "SKIP: qemu-img not found (required for snapshot isolation tests)"
+    exit 0
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$SCRIPT_DIR/../lib"
@@ -250,39 +254,10 @@ test_verify_snapshot() {
 }
 
 # ──────────────────────────────────────────────
-# Test 7: Base image safety check
-# ──────────────────────────────────────────────
-test_base_image_safety() {
-    echo "Test 7: Base image safety check"
-
-    setup_base_image
-
-    # No snapshots — should be safe
-    delete_all_snapshots >/dev/null
-
-    if check_base_image_safety 2>/dev/null; then
-        pass "Safe to modify base when no snapshots exist"
-    else
-        fail "Incorrectly blocked base modification with no snapshots"
-    fi
-
-    # Create a snapshot — should warn
-    local project_dir="$TEST_DIR/fake-project-safety"
-    mkdir -p "$project_dir"
-    create_project_snapshot "$project_dir" >/dev/null
-
-    if ! check_base_image_safety 2>/dev/null; then
-        pass "Correctly warns when snapshots depend on base image"
-    else
-        fail "Did not warn about dependent snapshots"
-    fi
-}
-
-# ──────────────────────────────────────────────
-# Test 8: Snapshot initial size is small (COW overhead only)
+# Test 7: Snapshot initial size is small (COW overhead only)
 # ──────────────────────────────────────────────
 test_snapshot_cow_size() {
-    echo "Test 8: Snapshot COW — initial size is small"
+    echo "Test 7: Snapshot COW — initial size is small"
 
     setup_base_image
 
@@ -324,8 +299,6 @@ echo ""
 test_project_isolation
 echo ""
 test_verify_snapshot
-echo ""
-test_base_image_safety
 echo ""
 test_snapshot_cow_size
 echo ""

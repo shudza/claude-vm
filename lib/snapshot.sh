@@ -10,11 +10,7 @@
 # Functions:
 #   create_project_snapshot  — Create a linked snapshot for a project
 #   verify_snapshot          — Verify snapshot integrity and backing chain
-#   snapshot_info            — Show snapshot details (size, backing file, etc.)
-#   list_snapshots           — List all project snapshots with details
 #   delete_snapshot          — Remove a project snapshot
-#   delete_all_snapshots     — Remove all project snapshots
-#   protect_base_image       — Warn if base image would be modified while snapshots exist
 
 set -euo pipefail
 
@@ -135,86 +131,6 @@ verify_snapshot() {
     return 0
 }
 
-# Show detailed information about a project's snapshot
-# Args: $1 = project directory (defaults to $PWD)
-snapshot_info() {
-    local project_dir="${1:-$PWD}"
-    local snap_path
-
-    load_config
-
-    snap_path="$(project_snapshot_path "$project_dir")"
-
-    if [[ ! -f "$snap_path" ]]; then
-        echo "No snapshot for project: $project_dir"
-        return 1
-    fi
-
-    local hash
-    hash="$(project_hash "$project_dir")"
-
-    echo "Project: $project_dir"
-    echo "Hash: $hash"
-    echo "Snapshot: $snap_path"
-    echo ""
-
-    # Use qemu-img info for detailed snapshot metadata
-    qemu-img info "$snap_path" 2>/dev/null | while IFS= read -r line; do
-        echo "  $line"
-    done
-}
-
-# List all project snapshots with details
-list_snapshots() {
-    load_config
-    ensure_dirs
-
-    local count=0
-
-    if [[ ! -d "$SNAPSHOTS_DIR" ]]; then
-        echo "No snapshots directory."
-        return 0
-    fi
-
-    for snap in "$SNAPSHOTS_DIR"/*.qcow2; do
-        if [[ ! -f "$snap" ]]; then
-            continue
-        fi
-
-        local hash size actual_size backing project_dir_label
-        hash="$(basename "$snap" .qcow2)"
-        size="$(du -h "$snap" | cut -f1)"
-
-        # Read project directory from sidecar file
-        local project_file="$SNAPSHOTS_DIR/${hash}.project"
-        if [[ -f "$project_file" ]]; then
-            project_dir_label="$(cat "$project_file")"
-        else
-            project_dir_label="(unknown)"
-        fi
-
-        # Get virtual size and backing file from qemu-img
-        local info_json
-        info_json="$(qemu-img info --output=json "$snap" 2>/dev/null || echo '{}')"
-
-        actual_size="$(echo "$info_json" | jq -r '.["actual-size"] // 0' 2>/dev/null || echo 0)"
-        actual_size_human="$(numfmt --to=iec "$actual_size" 2>/dev/null || echo "${actual_size}B")"
-
-        backing="$(echo "$info_json" | jq -r '.["backing-filename"] // "none"' 2>/dev/null || echo "unknown")"
-
-        echo "  $project_dir_label"
-        echo "    $hash  disk=$size  actual=$actual_size_human  backing=$(basename "$backing" 2>/dev/null || echo "$backing")"
-        count=$(( count + 1 ))
-    done
-
-    if (( count == 0 )); then
-        echo "  (no snapshots)"
-    else
-        echo ""
-        echo "  Total: $count snapshot(s)"
-    fi
-}
-
 # Delete a project's snapshot
 # Args: $1 = project directory (defaults to $PWD)
 delete_snapshot() {
@@ -236,43 +152,3 @@ delete_snapshot() {
     echo "Snapshot deleted: $snap_path"
 }
 
-# Delete all project snapshots
-delete_all_snapshots() {
-    load_config
-    ensure_dirs
-
-    local count=0
-    for snap in "$SNAPSHOTS_DIR"/*.qcow2; do
-        if [[ -f "$snap" ]]; then
-            local hash
-            hash="$(basename "$snap" .qcow2)"
-            rm -f "$snap" "$SNAPSHOTS_DIR/${hash}.project" "$SNAPSHOTS_DIR/${hash}.ports"
-            count=$(( count + 1 ))
-        fi
-    done
-
-    echo "Deleted $count snapshot(s)."
-}
-
-# Check if it's safe to modify the base image
-# Returns: 0 if safe (no snapshots), 1 if snapshots exist
-check_base_image_safety() {
-    load_config
-    ensure_dirs
-
-    local count=0
-    for snap in "$SNAPSHOTS_DIR"/*.qcow2; do
-        if [[ -f "$snap" ]]; then
-            count=$(( count + 1 ))
-        fi
-    done
-
-    if (( count > 0 )); then
-        echo "WARNING: $count project snapshot(s) depend on the base image." >&2
-        echo "Modifying the base image will corrupt all linked snapshots." >&2
-        echo "Run 'claude-vm destroy --all' first, or 'claude-vm reset' per project after rebuild." >&2
-        return 1
-    fi
-
-    return 0
-}
