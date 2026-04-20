@@ -268,6 +268,8 @@ launch_vm() {
     snap_path="$(project_snapshot_path "$project_dir")"
     base_img="$(base_image_path)"
     run_dir="$(project_run_dir "$project_dir")"
+    local is_new_vm=false
+    [[ ! -f "$snap_path" ]] && is_new_vm=true
 
     # Check if VM is already running — attach another Claude Code instance
     if is_vm_running "$project_dir"; then
@@ -340,8 +342,10 @@ launch_vm() {
     # Verify virtiofs mount
     ui_phase "Mounting workspace" virtiofs_ensure_mounted "$ssh_port" "$ssh_key" "$VM_USER"
 
-    # Sync Claude Code config
-    ui_phase "Syncing config" sync_claude_config_to_vm "$ssh_port"
+    # Sync Claude Code config — only on first VM creation
+    if [[ "$is_new_vm" == true ]]; then
+        ui_phase "Syncing config" sync_claude_config_to_vm "$ssh_port"
+    fi
 
     local elapsed=$(( $(date +%s) - start_time ))
     ui_done "Ready in ${elapsed}s — $(basename "$project_dir")"
