@@ -31,9 +31,13 @@ generate_cloud_init_userdata() {
     local pkg_tuning_files
     pkg_tuning_files="$(_cloud_init_pkg_tuning_files "$flavor")"
 
-    # Flavor-specific: early boot commands (run before the package stage)
-    local bootcmd_block
-    bootcmd_block="$(_cloud_init_bootcmd "$flavor")"
+    # Flavor-specific: extra early boot commands (run before the package stage)
+    local bootcmd_extra
+    bootcmd_extra="$(_cloud_init_bootcmd_extra "$flavor")"
+
+    # Installer prefetch script (same for all flavors)
+    local prefetch_file
+    prefetch_file="$(_cloud_init_prefetch_file)"
 
     local cleanup_runcmd
     cleanup_runcmd="$(_cloud_init_cleanup_runcmd "$flavor")"
@@ -52,7 +56,12 @@ hostname: claude-vm
 package_update: true
 package_upgrade: false
 
-$bootcmd_block
+# The prefetch launcher detaches a waiter that execs the prefetch script the
+# moment write_files lands it — overlapping the uv + Claude Code downloads
+# with the package phase (the two dominant network-bound build phases)
+bootcmd:
+  - [sh, -c, "setsid sh -c 'i=0; while [ ! -x /usr/local/sbin/claude-vm-prefetch ] && [ \$i -lt 60 ]; do sleep 1; i=\$((i+1)); done; exec /usr/local/sbin/claude-vm-prefetch $VM_USER' >/var/log/claude-vm-prefetch.log 2>&1 </dev/null &"]
+$bootcmd_extra
 
 users:
   - name: $VM_USER
@@ -68,6 +77,7 @@ $packages_block
 
 write_files:
 $pkg_tuning_files
+$prefetch_file
   - path: /etc/ssh/sshd_config.d/claude-vm.conf
     content: |
       PermitRootLogin no
@@ -131,10 +141,12 @@ runcmd:
   - chown $VM_USER:$VM_USER /workspace
   # Fix ownership of deferred write_files
   - chown -R $VM_USER:$VM_USER /home/$VM_USER/.bashrc /home/$VM_USER/.ssh
-  # Install uv (Python package manager)
-  - sudo -u $VM_USER bash -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
-  # Install Claude Code (native installer, no npm needed)
-  - sudo -u $VM_USER bash -c 'curl -fsSL https://claude.ai/install.sh | bash'
+  # uv and Claude Code install in the background from bootcmd — wait for the
+  # prefetch, then fall back to inline installs if it didn't complete
+  - timeout 300 sh -c 'while [ ! -f /run/claude-vm-prefetch-done ]; do sleep 1; done' || /usr/local/sbin/claude-vm-prefetch --kill
+  - test -f /run/claude-vm-prefetch-ok || sudo -u $VM_USER bash -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
+  - test -f /run/claude-vm-prefetch-ok || sudo -u $VM_USER bash -c 'curl -fsSL https://claude.ai/install.sh | bash'
+  - cat /var/log/claude-vm-prefetch.log || true
   # Enable virtiofs workspace mount
   - systemctl daemon-reload
   - systemctl enable workspace.mount
@@ -357,25 +369,76 @@ PKG
     esac
 }
 
-# Early boot commands, run in the init stage before package_update fetches
-# indexes. The Debian cloud image ships deb822 sources with deb-src enabled;
-# dropping the Sources indexes roughly halves the apt index download.
-_cloud_init_bootcmd() {
+# Extra bootcmd items appended after the prefetch launcher, run in the init
+# stage before package_update fetches indexes. The Debian cloud image ships
+# deb822 sources with deb-src enabled; dropping the Sources indexes roughly
+# halves the apt index download.
+_cloud_init_bootcmd_extra() {
     local flavor="$1"
     case "$(flavor_distro "$flavor")" in
         debian|ubuntu)
             cat << 'BOOT'
-bootcmd:
   - [sh, -c, "sed -i 's/^Types: deb deb-src$/Types: deb/' /etc/apt/sources.list.d/*.sources 2>/dev/null || true"]
 BOOT
             ;;
         archlinux|fedora)
             ;;
         *)
-            echo "ERROR: unknown flavor '$flavor' in _cloud_init_bootcmd" >&2
+            echo "ERROR: unknown flavor '$flavor' in _cloud_init_bootcmd_extra" >&2
             return 1
             ;;
     esac
+}
+
+# The installer prefetch script, written via write_files and launched from
+# bootcmd. It waits for its preconditions (user created, network up, curl and
+# sudo present — on images without curl the package transaction provides it),
+# then runs the uv and Claude Code installers while cloud-init's package
+# phase is still working. runcmd waits on the -done marker and reruns the
+# installers inline unless the -ok marker is present.
+#
+# Lock safety: both installers are pure downloads into ~/.local and never
+# invoke apt/dnf/pacman, so they cannot contend for the package manager lock
+# while cloud-init's package transaction runs. Belt-and-braces for a future
+# installer change: apt gets DPkg::Lock::Timeout via the tuning file (dnf
+# already blocks on its lock), and --kill lets runcmd tear the prefetch
+# session down on wait timeout so the inline fallback never runs concurrently
+# with a hung prefetch.
+_cloud_init_prefetch_file() {
+    cat << 'PREFETCH'
+  - path: /usr/local/sbin/claude-vm-prefetch
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      if [ "$1" = "--kill" ]; then
+          pid="$(cat /run/claude-vm-prefetch.pid 2>/dev/null)"
+          [ -n "$pid" ] || exit 0
+          grep -q claude-vm-prefetch "/proc/$pid/cmdline" 2>/dev/null || exit 0
+          kill -TERM -- -"$pid" 2>/dev/null
+          sleep 1
+          kill -KILL -- -"$pid" 2>/dev/null
+          exit 0
+      fi
+      user="$1"
+      echo "$$" > /run/claude-vm-prefetch.pid
+      deadline=$(( $(date +%s) + 240 ))
+      while :; do
+          if id "$user" >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1 \
+             && curl -fsm 3 -o /dev/null https://claude.ai/install.sh 2>/dev/null; then
+              break
+          fi
+          if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "prefetch: preconditions not met before deadline, deferring to runcmd"
+              touch /run/claude-vm-prefetch-done
+              exit 0
+          fi
+          sleep 1
+      done
+      sudo -u "$user" timeout 300 sh -c 'curl -LsSf https://astral.sh/uv/install.sh | sh' \
+          && sudo -u "$user" timeout 300 bash -c 'curl -fsSL https://claude.ai/install.sh | bash' \
+          && touch /run/claude-vm-prefetch-ok
+      touch /run/claude-vm-prefetch-done
+PREFETCH
 }
 
 # Package manager tuning written before the package transaction runs
@@ -399,6 +462,7 @@ _cloud_init_pkg_tuning_files() {
       APT::Install-Recommends "false";
       APT::Install-Suggests "false";
       Acquire::Languages "none";
+      DPkg::Lock::Timeout "300";
     permissions: '0644'
 TUNING
             ;;

@@ -117,6 +117,7 @@ test_pkg_tuning_per_family() {
                 grep -q 'force-unsafe-io' "$ud"                     || { fail "$flavor tuning" "missing force-unsafe-io"; ok=false; }
                 grep -q '/etc/apt/apt.conf.d/99claude-vm' "$ud"     || { fail "$flavor tuning" "missing apt tuning file"; ok=false; }
                 grep -q 'APT::Install-Recommends "false";' "$ud"    || { fail "$flavor tuning" "missing Install-Recommends false"; ok=false; }
+                grep -q 'DPkg::Lock::Timeout' "$ud"                 || { fail "$flavor tuning" "missing dpkg lock timeout"; ok=false; }
                 ;;
             fedora-*)
                 grep -q '/etc/dnf/dnf.conf' "$ud"          || { fail "$flavor tuning" "missing dnf.conf tuning"; ok=false; }
@@ -139,14 +140,38 @@ test_deb_src_disabled_before_package_stage() {
         ok=true
         case "$flavor" in
             debian-*|ubuntu-*)
-                grep -q '^bootcmd:' "$(_userdata "$flavor")"          || { fail "$flavor bootcmd" "missing bootcmd section"; ok=false; }
                 grep -q "Types: deb deb-src" "$(_userdata "$flavor")" || { fail "$flavor bootcmd" "missing deb-src disable"; ok=false; }
                 ;;
             *)
-                grep -q '^bootcmd:' "$(_userdata "$flavor")" && { fail "$flavor bootcmd" "bootcmd leaked into non-apt flavor"; ok=false; }
+                grep -q "Types: deb deb-src" "$(_userdata "$flavor")" && { fail "$flavor bootcmd" "deb-src sed leaked into non-apt flavor"; ok=false; }
                 ;;
         esac
         $ok && pass "$flavor: deb-src bootcmd $([[ "$flavor" == debian-* || "$flavor" == ubuntu-* ]] && echo present || echo absent)"
+    done
+}
+
+test_installer_prefetch() {
+    local flavor ud ok
+    for flavor in "${ALL_FLAVORS[@]}"; do
+        ud="$(_userdata "$flavor")"
+        ok=true
+        grep -q '^bootcmd:' "$ud" \
+            || { fail "$flavor prefetch" "missing bootcmd section"; ok=false; }
+        grep -q 'exec /usr/local/sbin/claude-vm-prefetch tester' "$ud" \
+            || { fail "$flavor prefetch" "launcher missing or wrong user"; ok=false; }
+        grep -q '  - path: /usr/local/sbin/claude-vm-prefetch' "$ud" \
+            || { fail "$flavor prefetch" "prefetch script not in write_files"; ok=false; }
+        grep -q 'claude-vm-prefetch-done' "$ud" \
+            || { fail "$flavor prefetch" "runcmd does not wait for done marker"; ok=false; }
+        grep -q 'test -f /run/claude-vm-prefetch-ok || sudo -u tester' "$ud" \
+            || { fail "$flavor prefetch" "missing inline fallback installs"; ok=false; }
+        grep -qF 'i=$((i+1))' "$ud" \
+            || { fail "$flavor prefetch" "launcher loop counter was interpolated away"; ok=false; }
+        grep -q 'claude-vm-prefetch --kill' "$ud" \
+            || { fail "$flavor prefetch" "runcmd wait timeout does not kill the prefetch"; ok=false; }
+        grep -q 'claude-vm-prefetch.pid' "$ud" \
+            || { fail "$flavor prefetch" "prefetch does not record its pid"; ok=false; }
+        $ok && pass "$flavor: installer prefetch launcher, script, and fallback present"
     done
 }
 
@@ -264,6 +289,7 @@ run_test test_no_external_repos
 run_test test_ssh_service_per_distro
 run_test test_pkg_tuning_per_family
 run_test test_deb_src_disabled_before_package_stage
+run_test test_installer_prefetch
 run_test test_tuning_precedes_packages_stage
 run_test test_slim_excludes_full_tools
 run_test test_full_includes_build_tools
