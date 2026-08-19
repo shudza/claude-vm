@@ -133,6 +133,23 @@ test_pkg_tuning_per_family() {
     done
 }
 
+test_deb_src_disabled_before_package_stage() {
+    local flavor ok
+    for flavor in "${ALL_FLAVORS[@]}"; do
+        ok=true
+        case "$flavor" in
+            debian-*|ubuntu-*)
+                grep -q '^bootcmd:' "$(_userdata "$flavor")"          || { fail "$flavor bootcmd" "missing bootcmd section"; ok=false; }
+                grep -q "Types: deb deb-src" "$(_userdata "$flavor")" || { fail "$flavor bootcmd" "missing deb-src disable"; ok=false; }
+                ;;
+            *)
+                grep -q '^bootcmd:' "$(_userdata "$flavor")" && { fail "$flavor bootcmd" "bootcmd leaked into non-apt flavor"; ok=false; }
+                ;;
+        esac
+        $ok && pass "$flavor: deb-src bootcmd $([[ "$flavor" == debian-* || "$flavor" == ubuntu-* ]] && echo present || echo absent)"
+    done
+}
+
 test_tuning_precedes_packages_stage() {
     # write_files must carry the tuning (cloud-init runs write_files before
     # packages), i.e. the tuning path appears in the write_files block
@@ -246,6 +263,7 @@ run_test test_node_and_gh_from_distro_repos
 run_test test_no_external_repos
 run_test test_ssh_service_per_distro
 run_test test_pkg_tuning_per_family
+run_test test_deb_src_disabled_before_package_stage
 run_test test_tuning_precedes_packages_stage
 run_test test_slim_excludes_full_tools
 run_test test_full_includes_build_tools

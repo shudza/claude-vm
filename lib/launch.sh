@@ -317,7 +317,7 @@ launch_vm() {
         echo ""
         echo "  Project: $project_dir"
         if [[ ! -f "$base_img" ]]; then
-            echo "  Base image ($FLAVOR) will be built first (about a minute, plus the image download on the first ever run)."
+            echo "  Base image ($FLAVOR) will be built first (2-3 minutes, plus the image download on the first ever run)."
         fi
         echo ""
         read -rp "  Continue? [Y/n] " confirm

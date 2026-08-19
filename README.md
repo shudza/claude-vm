@@ -72,7 +72,7 @@ cd ~/my-project
 claude-vm
 ```
 
-First run builds a base image (about a minute plus the cloud image download), creates a project snapshot, and launches the VM. Subsequent runs resume in seconds.
+First run builds a base image (2-3 minutes plus the cloud image download), creates a project snapshot, and launches the VM. Subsequent runs resume in seconds.
 
 ## Commands
 

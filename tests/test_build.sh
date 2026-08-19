@@ -173,6 +173,29 @@ else
     teardown_fake_bin
 fi
 
+# ── Test 7: checksum URL lookup resolves variant flavor names ────────────────
+echo "--- Test 7: verify_cloud_image finds the checksum URL for variant flavors ---"
+setup_fake_bin
+printf '#!/usr/bin/env bash\nexit 1\n' > "$FAKE_BIN/curl"
+chmod +x "$FAKE_BIN/curl"
+
+# curl is stubbed to fail: reaching "Could not fetch checksum file" proves the
+# distro-keyed URL lookup resolved for a <distro>-<variant> flavor name.
+output="$(PATH="$FAKE_BIN:$PATH" bash -c '
+    source "'"$REPO_DIR"'/lib/build.sh"
+    FLAVOR=debian-slim
+    verify_cloud_image /tmp/fake.qcow2' 2>&1)"
+rc=$?
+
+if (( rc == 0 )) && [[ "$output" != *"No upstream checksum URL"* ]] \
+   && [[ "$output" == *"Could not fetch checksum file"* ]]; then
+    pass "variant flavor resolves its distro's checksum URL"
+else
+    fail "variant flavor should resolve checksum URL (rc=$rc): $output"
+fi
+
+teardown_fake_bin
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 echo ""
 echo "Results: $TESTS_PASSED/$TESTS_RUN passed"

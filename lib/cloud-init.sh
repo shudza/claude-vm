@@ -31,6 +31,10 @@ generate_cloud_init_userdata() {
     local pkg_tuning_files
     pkg_tuning_files="$(_cloud_init_pkg_tuning_files "$flavor")"
 
+    # Flavor-specific: early boot commands (run before the package stage)
+    local bootcmd_block
+    bootcmd_block="$(_cloud_init_bootcmd "$flavor")"
+
     local cleanup_runcmd
     cleanup_runcmd="$(_cloud_init_cleanup_runcmd "$flavor")"
 
@@ -47,6 +51,8 @@ hostname: claude-vm
 # Sync package DB before installing (needed for pacman/dnf; harmless for apt)
 package_update: true
 package_upgrade: false
+
+$bootcmd_block
 
 users:
   - name: $VM_USER
@@ -347,6 +353,27 @@ PKG
   - wget
   - gnupg2
 PKG
+            ;;
+    esac
+}
+
+# Early boot commands, run in the init stage before package_update fetches
+# indexes. The Debian cloud image ships deb822 sources with deb-src enabled;
+# dropping the Sources indexes roughly halves the apt index download.
+_cloud_init_bootcmd() {
+    local flavor="$1"
+    case "$(flavor_distro "$flavor")" in
+        debian|ubuntu)
+            cat << 'BOOT'
+bootcmd:
+  - [sh, -c, "sed -i 's/^Types: deb deb-src$/Types: deb/' /etc/apt/sources.list.d/*.sources 2>/dev/null || true"]
+BOOT
+            ;;
+        archlinux|fedora)
+            ;;
+        *)
+            echo "ERROR: unknown flavor '$flavor' in _cloud_init_bootcmd" >&2
+            return 1
             ;;
     esac
 }
