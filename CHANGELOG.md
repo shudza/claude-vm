@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-08-19
+
 ### Added
 
+- Each VM's Claude Code transcripts now live under `~/.claude/projects/<project-name>` instead of every project sharing `-workspace`. `claude-vm` sets `CLAUDE_CODE_PROJECT_DIR_NAME` (plus `CLAUDE_CONFIG_DIR`, which the name requires) for both the Claude Code launch and `claude-vm ssh` shells; override them from `~/.env` inside the VM. The guest's global config json accordingly moves to `~/.claude/.claude.json` — synced there on new VMs and migrated automatically on the first launch after a rebase.
+- User-scope `agents/`, `commands/`, `workflows/` and `keybindings.json` from `~/.claude/` are synced into new VMs alongside plugins and skills.
+- GitLab support: `glab` ships in the full flavors, and `~/.config/glab-cli/` is synced into new VMs and preserved across `claude-vm rebase`, the same as `gh`.
 - Every flavor now comes in two variants: **slim** (git, Node.js, Python, GitHub CLI, Claude Code) and **full** (slim plus compilers, tmux, vim, and debugging tools). The default is `debian-slim`. Bare names like `debian` still work and mean the full variant, so existing setups keep their tools.
 - Each flavor gets its own base image, so you can use different flavors for different projects at the same time. Existing VMs keep working; `claude-vm rebase` moves them over to the new layout.
 
@@ -20,9 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - uv ships only in the full variants now; slim keeps Python with pip and venv.
 - Launch, stop, and rebase show a single status line that updates in place instead of scrolling output. A successful launch drops straight into Claude Code. Scripts and CI still get plain one-line-per-step output.
 - `claude-vm stop --all` and `claude-vm rebase` stop all running VMs at once instead of one at a time.
+- The default CPU count is 4 (clamped to the host's core count) instead of 2. Claude Code's parallel subagents and workflows scale with the VM's cores, and at 2 they ran one at a time. An explicit `VM_CPUS` is left alone.
+- `claude-vm rebase` no longer carries Claude Code runtime state (`daemon/`, `jobs/`, `sessions/`, caches and similar) into the rebuilt VM — stale daemon locks broke background agents after a rebase. Transcripts, plans, history and all settings are still preserved.
 
 ### Fixed
 
+- The e2e test suites honor `TMPDIR` instead of hardcoding `/tmp`, so they can run on hosts where `/tmp` is a small tmpfs.
 - Downloaded cloud images are checksum-verified again (verification was silently skipped for a while during development).
 - Interrupting a rebase no longer leaves its lock behind.
 
@@ -62,7 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `claude-vm rebase` command: refreshes the shared base image (Claude Code, OS packages, kernel) while preserving each project VM's persistent state by extracting `~/.claude/`, `~/.claude.json`, `~/.gitconfig`, and `~/.config/gh/` to a per-project backup directory, rebuilding the base from upstream, and lazy-restoring the extracted state on the project's next launch.
 
-[Unreleased]: https://github.com/shudza/claude-vm/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/shudza/claude-vm/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/shudza/claude-vm/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/shudza/claude-vm/compare/v0.1.1-alpha...v0.1.2
 [0.1.1-alpha]: https://github.com/shudza/claude-vm/compare/v0.1.0-alpha...v0.1.1-alpha
 [0.1.0-alpha]: https://github.com/shudza/claude-vm/releases/tag/v0.1.0-alpha
