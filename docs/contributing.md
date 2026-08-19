@@ -55,7 +55,11 @@ docs/
 
 - User-facing output during launch/shutdown goes through `lib/ui.sh`.
 - Use `ui_phase "message" function args...` to wrap any operation that might produce output.
-- Use `ui_info`, `ui_warn`, `ui_error` for standalone messages.
+  In an interactive terminal phases share a single redrawing status line and successful
+  phases leave nothing behind; non-tty/quiet output prints one `✓`/`✗` line per phase.
+- Use `ui_info`, `ui_warn`, `ui_done` for standalone messages.
+- Use `ui_progress "message"` / `ui_progress_clear` for a transient progress line while
+  polling parallel work (never alongside a running `ui_phase` spinner).
 - Never `echo` directly in launch/shutdown code paths -- use the UI functions.
 - Technical details go to the log file, not the terminal.
 

@@ -3,14 +3,13 @@
 #
 # Ensures:
 # - Guest filesystem is synced before stopping
-# - VM state is saved into the QCOW2 for fast resume (optional)
 # - QEMU is shut down gracefully via ACPI, then force-killed as fallback
 # - virtiofsd is stopped
 # - The linked snapshot file on disk is NEVER deleted
 # - Runtime artifacts (PID files, sockets) are cleaned up
 #
 # The linked snapshot is preserved because:
-# - QEMU's ACPI shutdown or quit command flushes dirty blocks to the qcow2
+# - QEMU's ACPI shutdown flushes dirty blocks to the qcow2
 # - We verify the snapshot file exists and is non-zero after shutdown
 # - Only runtime state (PID files, sockets, logs) is removed
 
@@ -22,10 +21,6 @@ source "$SCRIPT_DIR/ui.sh"
 # Timeout constants
 ACPI_SHUTDOWN_TIMEOUT=15     # seconds to wait for ACPI shutdown
 FORCE_KILL_GRACE=2           # seconds between SIGTERM and SIGKILL
-SAVEVM_TIMEOUT=10            # seconds to wait for savevm to complete
-
-# VM state tag for fast resume
-VM_STATE_TAG="claude-vm-state"
 
 # Send a command to the QEMU HMP monitor
 # Args: $1 = monitor socket path, $2 = command
@@ -37,58 +32,16 @@ _hmp_command() {
     fi
 }
 
-# Send a command to the QEMU QMP monitor
-# Args: $1 = QMP socket path, $2+ = QMP JSON commands (one per arg)
-_qmp_command() {
-    local sock="$1"
-    shift
-
-    if [[ ! -S "$sock" ]]; then
-        return 1
-    fi
-
-    (
-        echo '{"execute": "qmp_capabilities"}'
-        sleep 0.2
-        for cmd in "$@"; do
-            echo "$cmd"
-            sleep 0.3
-        done
-    ) | socat -T5 - "UNIX-CONNECT:$sock" 2>/dev/null
-}
-
-# Attempt to save VM state for fast resume via QMP
-# Args: $1 = run directory
-# Returns: 0 if saved, 1 if not possible
-try_save_vm_state() {
-    local run_dir="$1"
-    local qmp_sock="$run_dir/qmp.sock"
-
-    if [[ ! -S "$qmp_sock" ]]; then
-        return 1
-    fi
-
-    local output
-    output=$(_qmp_command "$qmp_sock" \
-        '{"execute": "human-monitor-command", "arguments": {"command-line": "savevm '"$VM_STATE_TAG"'"}}' \
-    ) 2>/dev/null || return 1
-
-    # Wait for savevm to complete (it writes to the qcow2)
-    sleep "$SAVEVM_TIMEOUT"
-    return 0
-}
-
 # Gracefully shut down the VM, preserving the linked snapshot
 # This is the primary shutdown function used by `claude-vm stop`
 #
 # Shutdown sequence:
-# 1. (Optional) Save VM state for fast resume
-# 2. Send ACPI power-down via HMP monitor (triggers guest shutdown)
-# 3. Wait for QEMU process to exit
-# 4. If still running, SIGTERM → SIGKILL
-# 5. Stop virtiofsd
-# 6. Verify snapshot file integrity
-# 7. Clean up runtime files (but NOT the snapshot)
+# 1. Send ACPI power-down via HMP monitor (triggers guest shutdown)
+# 2. Wait for QEMU process to exit
+# 3. If still running, SIGTERM → SIGKILL
+# 4. Stop virtiofsd
+# 5. Verify snapshot file integrity
+# 6. Clean up runtime files (but NOT the snapshot)
 #
 # Args: $1 = project directory
 # Returns: 0 on success, 1 on error
@@ -107,7 +60,6 @@ shutdown_vm() {
 
     local pid_file="$run_dir/qemu.pid"
     local monitor_sock="$run_dir/monitor.sock"
-    local qmp_sock="$run_dir/qmp.sock"
 
     # Check if VM is actually running
     if [[ ! -f "$pid_file" ]]; then
@@ -127,20 +79,11 @@ shutdown_vm() {
     # Initialize UI logging
     ui_init "$run_dir/shutdown.log"
 
-    # Step 1: Save VM state for fast resume (best effort)
-    ui_phase "Saving VM state" try_save_vm_state "$run_dir" || true
-
-    # Step 2+3+4: Graceful shutdown with fallback to force kill
+    # Step 1+2+3: Graceful shutdown with fallback to force kill
     _do_shutdown() {
         local shutdown_sent=false
 
-        # Try QMP quit (cleaner — QEMU flushes all blocks)
-        if [[ -S "$qmp_sock" ]]; then
-            _qmp_command "$qmp_sock" '{"execute": "quit"}' &>/dev/null && shutdown_sent=true
-        fi
-
-        # Fall back to HMP system_powerdown
-        if ! $shutdown_sent && [[ -S "$monitor_sock" ]]; then
+        if [[ -S "$monitor_sock" ]]; then
             _hmp_command "$monitor_sock" "system_powerdown"
             shutdown_sent=true
         fi
@@ -166,10 +109,10 @@ shutdown_vm() {
     }
     ui_phase "Stopping VM" _do_shutdown
 
-    # Step 5: Stop virtiofsd
+    # Step 4: Stop virtiofsd
     ui_phase "Stopping filesystem sharing" _stop_virtiofsd "$run_dir"
 
-    # Step 6: Verify snapshot integrity
+    # Step 5: Verify snapshot integrity
     if [[ -f "$snap_path" ]]; then
         local snap_size
         snap_size=$(stat -c%s "$snap_path" 2>/dev/null || echo 0)
@@ -180,7 +123,7 @@ shutdown_vm() {
         ui_warn "Snapshot not found after shutdown — run 'claude-vm reset' to recreate"
     fi
 
-    # Step 7: Clean up runtime artifacts only (NOT the snapshot)
+    # Step 6: Clean up runtime artifacts only (NOT the snapshot)
     _cleanup_runtime "$run_dir"
 
     ui_done "Stopped"
@@ -213,6 +156,62 @@ stop_vm_by_run_dir() {
     fi
 }
 
+# Stop multiple VMs concurrently
+# Args: $1... = run directories
+# Per-VM output goes to <run_dir>/stop.log. Shows a single (k/N) progress
+# line in rich mode. Sets STOPPED_COUNT and FAILED_RUN_DIRS for the caller.
+# Returns: 0 if all stopped, 1 if any failed
+stop_vms_parallel() {
+    local dirs=("$@")
+    local pids=()
+    local total=${#dirs[@]}
+    local d p i running finished
+
+    STOPPED_COUNT=0
+    FAILED_RUN_DIRS=()
+
+    if (( total == 0 )); then
+        return 0
+    fi
+
+    for d in "${dirs[@]}"; do
+        # Subshell isolates UI globals (log path, spinner pid, traps);
+        # quiet mode suppresses nested spinners that would fight over the tty
+        (
+            _UI_QUIET=true
+            _UI_RICH=false
+            stop_vm_by_run_dir "$d"
+        ) > "${d%/}/stop.log" 2>&1 &
+        pids+=($!)
+    done
+
+    running=$total
+    while (( running > 0 )); do
+        running=0
+        for p in "${pids[@]}"; do
+            if kill -0 "$p" 2>/dev/null; then
+                (( ++running )) || true
+            fi
+        done
+        finished=$(( total - running ))
+        ui_progress "Stopping ${total} VM(s)... (${finished}/${total})"
+        if (( running > 0 )); then
+            sleep 0.2
+        fi
+    done
+    ui_progress_clear
+
+    for i in "${!pids[@]}"; do
+        if wait "${pids[$i]}"; then
+            (( ++STOPPED_COUNT )) || true
+        else
+            FAILED_RUN_DIRS+=("${dirs[$i]}")
+        fi
+    done
+
+    (( ${#FAILED_RUN_DIRS[@]} == 0 ))
+}
+
 # Direct shutdown when we only have a run directory (no project dir)
 # Stripped-down version of shutdown_vm for the orphaned case
 # Args: $1 = run directory, $2 = hash
@@ -223,7 +222,6 @@ shutdown_vm_from_run_dir() {
 
     local pid_file="$run_dir/qemu.pid"
     local monitor_sock="$run_dir/monitor.sock"
-    local qmp_sock="$run_dir/qmp.sock"
 
     if [[ ! -f "$pid_file" ]]; then
         return 0
@@ -239,14 +237,9 @@ shutdown_vm_from_run_dir() {
 
     ui_init "$run_dir/shutdown.log"
 
-    ui_phase "Saving VM state" try_save_vm_state "$run_dir" || true
-
     _do_shutdown() {
         local shutdown_sent=false
-        if [[ -S "$qmp_sock" ]]; then
-            _qmp_command "$qmp_sock" '{"execute": "quit"}' &>/dev/null && shutdown_sent=true
-        fi
-        if ! $shutdown_sent && [[ -S "$monitor_sock" ]]; then
+        if [[ -S "$monitor_sock" ]]; then
             _hmp_command "$monitor_sock" "system_powerdown"
             shutdown_sent=true
         fi
@@ -310,7 +303,7 @@ _cleanup_runtime() {
     rm -f "$run_dir/qemu.pid" "$run_dir/virtiofsd.pid"
 
     # Remove sockets
-    rm -f "$run_dir/monitor.sock" "$run_dir/qmp.sock" "$run_dir/virtiofs.sock"
+    rm -f "$run_dir/monitor.sock" "$run_dir/virtiofs.sock"
 
     # Remove SSH port marker
     rm -f "$run_dir/ssh_port"

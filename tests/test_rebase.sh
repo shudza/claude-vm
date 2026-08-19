@@ -342,6 +342,53 @@ test_cmd_rebase_extracts_into_backup_dir() {
     teardown_test_env
 }
 
+# ── 11b: cmd_rebase stops running VMs in parallel before extracting ─────────
+
+test_cmd_rebase_stops_running_vms() {
+    echo "--- Test 11b: cmd_rebase stops running VMs in parallel ---"
+    setup_test_env
+
+    local proj_a="/tmp/proj-stop-a-$$"
+    local proj_b="/tmp/proj-stop-b-$$"
+    register_project "$proj_a"
+    register_project "$proj_b"
+    : > "$(base_image_path)"
+
+    local run_a run_b
+    run_a="$(project_run_dir "$proj_a")"
+    run_b="$(project_run_dir "$proj_b")"
+    mkdir -p "$run_a" "$run_b"
+
+    sleep 300 &
+    local pid_a=$!
+    echo "$pid_a" > "$run_a/qemu.pid"
+    sleep 300 &
+    local pid_b=$!
+    echo "$pid_b" > "$run_b/qemu.pid"
+
+    _extract_one_vm() { return 0; }
+    build_base_image() { echo "new base" > "$(base_image_path)"; }
+
+    local output
+    output=$(cmd_rebase --yes 2>&1)
+
+    local ok=true
+    if ! echo "$output" | grep -q "Stopping 2 running VM"; then
+        fail "stop announcement" "expected 'Stopping 2 running VM(s)', got: $output"; ok=false
+    fi
+    if kill -0 "$pid_a" 2>/dev/null; then
+        fail "VM A" "still running after rebase"; ok=false
+    fi
+    if kill -0 "$pid_b" 2>/dev/null; then
+        fail "VM B" "still running after rebase"; ok=false
+    fi
+    $ok && pass "both running VMs stopped, single announcement line"
+
+    kill "$pid_a" "$pid_b" 2>/dev/null
+    wait "$pid_a" "$pid_b" 2>/dev/null
+    teardown_test_env
+}
+
 # ── 12: cmd_rebase removes old snapshots + base and rebuilds ───────────────
 
 test_cmd_rebase_destroys_and_rebuilds() {
@@ -765,6 +812,7 @@ test_rebase_no_snapshots
 test_rebase_requires_base
 test_rebase_bad_flag
 test_cmd_rebase_extracts_into_backup_dir
+test_cmd_rebase_stops_running_vms
 test_cmd_rebase_destroys_and_rebuilds
 test_cmd_rebase_sidecar_lifecycle
 test_cmd_rebase_aborts_on_failure

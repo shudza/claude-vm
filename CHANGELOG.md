@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Launch, stop, and rebase progress now renders as a single status line that redraws in place (spinner + current phase). A successful launch prints nothing and drops straight into Claude Code (the `Ready in Ns` summary is gone); stop and rebase end with a one-line confirmation. Non-interactive output (CI, pipes, `CLAUDE_VM_QUIET`) keeps the previous one-line-per-phase format, and failures still commit a `✗` line with the log tail. `CLAUDE_VM_FORCE_TTY=true` forces the interactive rendering without a tty (used by tests).
+- `claude-vm stop --all` and `claude-vm rebase` stop running VMs concurrently instead of one at a time, showing a single `(k/N)` progress line. Per-VM shutdown output goes to `~/.claude-vm/run/<hash>/stop.log`.
+
+### Fixed
+
+- `ui_init` no longer clobbers a pre-existing EXIT trap, so an interrupted `rebase` releases its lock again.
+
+### Removed
+
+- The save-VM-state step of `claude-vm stop`. It could never succeed — QEMU was launched without the QMP socket it required — and only produced a spurious `✗ Saving VM state` error on every stop. There was also no `-loadvm` counterpart, so no state was ever resumed.
+
 ## [0.1.2] - 2026-07-25
 
 ### Added

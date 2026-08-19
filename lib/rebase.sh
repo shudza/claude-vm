@@ -202,7 +202,7 @@ _extract_one_vm() {
 
     mkdir -p "$run_dir" "$backup_dir"
     # Clean stale runtime artifacts from a prior crashed launch/extraction
-    rm -f "$run_dir/monitor.sock" "$run_dir/qmp.sock" "$run_dir/qemu.pid"
+    rm -f "$run_dir/monitor.sock" "$run_dir/qemu.pid"
 
     ssh_port="$(find_available_port "$SSH_PORT_BASE")"
     echo "$ssh_port" > "$run_dir/ssh_port"
@@ -447,18 +447,25 @@ EOF
     # NOTE: there is a small race — another process can call `claude-vm launch`
     # between here and _rebase_acquire_lock below; that case is caught by the
     # acquire-lock failure path which warns and aborts.
+    ui_init "$RUN_DIR/rebase.log"
     if [[ -d "$RUN_DIR" ]]; then
-        local run_subdir pid_file pid
+        local running_dirs=()
+        local run_subdir pid_file pid failed_dir
         for run_subdir in "$RUN_DIR"/*/; do
             [[ -d "$run_subdir" ]] || continue
             pid_file="${run_subdir}qemu.pid"
             [[ -f "$pid_file" ]] || continue
             pid=$(cat "$pid_file" 2>/dev/null) || continue
-            if kill -0 "$pid" 2>/dev/null; then
-                ui_info "Stopping running VM: $(basename "${run_subdir%/}")"
-                stop_vm_by_run_dir "$run_subdir" || true
-            fi
+            kill -0 "$pid" 2>/dev/null && running_dirs+=("$run_subdir")
         done
+        if (( ${#running_dirs[@]} > 0 )); then
+            [[ "$_UI_RICH" == "true" ]] || ui_info "Stopping ${#running_dirs[@]} running VM(s)..."
+            if ! stop_vms_parallel "${running_dirs[@]}"; then
+                for failed_dir in "${FAILED_RUN_DIRS[@]}"; do
+                    ui_warn "Failed to stop VM $(basename "${failed_dir%/}") — see ${failed_dir%/}/stop.log"
+                done
+            fi
+        fi
     fi
 
     if ! _rebase_acquire_lock; then

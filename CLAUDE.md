@@ -16,8 +16,9 @@ Host runs `claude-vm` which manages QEMU VMs with virtiofs mounts of `$PWD` → 
 find SSH port → start virtiofsd → launch QEMU (daemonized) → wait SSH → verify virtiofs →
 rsync config → exec into Claude Code
 
-**Shutdown flow:** save VM state (QMP savevm) → QMP quit / HMP powerdown → SIGTERM/SIGKILL fallback →
+**Shutdown flow:** HMP powerdown → SIGTERM/SIGKILL fallback →
 stop virtiofsd → verify snapshot intact → clean runtime artifacts (never delete snapshot)
+`stop --all` and `rebase` stop VMs concurrently via `stop_vms_parallel` (per-VM logs in `run/<hash>/stop.log`)
 
 **Config sync (rsync over SSH):** `~/.claude/`, `~/.claude.json`, `~/.gitconfig`, `~/.config/gh/`
 Include-list for `~/.claude/`: settings, credentials, plugins, skills, mcp.json, CLAUDE.md only.
@@ -46,7 +47,8 @@ carry over; local-scoped (`projects["<host-path>"]`) don't — the VM mounts at 
 - Constants: `UPPER_SNAKE_CASE`. Local vars: `local` at top of function
 - Quote all expansions: `"$var"`, `"${array[@]}"`
 - Use `[[ ]]` for conditionals, `(( ))` for arithmetic
-- User-facing output goes through `lib/ui.sh` (`ui_phase`, `ui_info`, `ui_warn`, `ui_error`)
+- User-facing output goes through `lib/ui.sh` (`ui_phase`, `ui_info`, `ui_warn`, `ui_done`, `ui_progress`)
+- Interactive terminals get a single redrawing status line; non-tty/quiet gets one line per phase
 - Never `echo` directly in launch/shutdown code paths
 - Error messages to stderr (`>&2`). Technical details to log file, not terminal
 - Snapshot file is **never** deleted during shutdown/error. Only `reset`/`destroy` remove snapshots

@@ -45,17 +45,25 @@ base.qcow2 (golden image, ~1.5GB)
 9. Sync host config into guest via rsync (~/.claude/, ~/.gitconfig, ~/.config/gh/)
 10. `exec` into SSH session running Claude Code
 
-All output goes to `~/.claude-vm/run/<hash>/launch.log`. The user sees a spinner per phase.
+All output goes to `~/.claude-vm/run/<hash>/launch.log`. In an interactive terminal
+the user sees a single status line that redraws in place per phase (spinner + phase
+text); successful phases leave no output behind, and a successful launch prints
+nothing before dropping into Claude Code.
+When output is not a terminal (CI, pipes) or `CLAUDE_VM_QUIET=true`, each phase
+prints one permanent `✓`/`✗` line instead. Failed phases always commit a `✗` line
+with the log path and a tail of recent errors.
 
 ## Shutdown Flow
 
-1. Save VM state into QCOW2 for fast resume (via QMP `savevm`)
-2. Send QMP `quit` (preferred) or HMP `system_powerdown` (fallback)
-3. Wait up to 15s for graceful exit
-4. SIGTERM then SIGKILL if still alive
-5. Stop virtiofsd
-6. Verify snapshot file integrity (exists, non-empty)
-7. Clean up runtime artifacts (PID files, sockets) -- snapshot is **never** deleted
+1. Send HMP `system_powerdown` (ACPI shutdown)
+2. Wait up to 15s for graceful exit
+3. SIGTERM then SIGKILL if still alive
+4. Stop virtiofsd
+5. Verify snapshot file integrity (exists, non-empty)
+6. Clean up runtime artifacts (PID files, sockets) -- snapshot is **never** deleted
+
+`stop --all` and `rebase` stop all running VMs concurrently, showing a single
+`(k/N)` progress line; per-VM output goes to `~/.claude-vm/run/<hash>/stop.log`.
 
 ## Build/Provisioning Flow
 

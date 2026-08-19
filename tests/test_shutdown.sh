@@ -519,6 +519,117 @@ test_cmd_stop_all_preserves_snapshots() {
 }
 
 # ============================================================================
+# Test 16: shutdown output has no "Saving VM state" step
+# ============================================================================
+test_shutdown_no_save_state_output() {
+    echo "Test 16: Shutdown does not mention saving VM state"
+    setup_test_env
+
+    local project_dir="/tmp/test-nosave-$$"
+    setup_fake_vm "$project_dir"
+
+    local output
+    output=$(shutdown_vm "$project_dir" 2>&1)
+
+    if echo "$output" | grep -qi "saving vm state"; then
+        fail "output still mentions saving state: $output"
+    else
+        pass "no save-state step in shutdown output"
+    fi
+
+    cleanup_fake_vm
+    teardown_test_env
+}
+
+# ============================================================================
+# Test 17: stop_vms_parallel stops multiple VMs concurrently
+# ============================================================================
+test_stop_vms_parallel() {
+    echo "Test 17: stop_vms_parallel stops multiple VMs"
+    setup_test_env
+
+    local proj_a="/tmp/test-par-a-$$"
+    local proj_b="/tmp/test-par-b-$$"
+
+    setup_fake_vm "$proj_a"
+    local pid_a="$FAKE_QEMU_PID" vfs_a="$FAKE_VFS_PID"
+    local run_a hash_a
+    run_a="$(project_run_dir "$proj_a")"
+    hash_a="$(project_hash "$proj_a")"
+    echo "$proj_a" > "$SNAPSHOTS_DIR/${hash_a}.project"
+
+    setup_fake_vm "$proj_b"
+    local pid_b="$FAKE_QEMU_PID" vfs_b="$FAKE_VFS_PID"
+    local run_b hash_b
+    run_b="$(project_run_dir "$proj_b")"
+    hash_b="$(project_hash "$proj_b")"
+    echo "$proj_b" > "$SNAPSHOTS_DIR/${hash_b}.project"
+
+    stop_vms_parallel "$run_a" "$run_b" >/dev/null 2>&1
+    local rc=$?
+    sleep 0.5
+
+    local ok=true
+    if kill -0 "$pid_a" 2>/dev/null; then
+        fail "VM A still running"; ok=false
+    fi
+    if kill -0 "$pid_b" 2>/dev/null; then
+        fail "VM B still running"; ok=false
+    fi
+    if (( STOPPED_COUNT != 2 )); then
+        fail "STOPPED_COUNT=$STOPPED_COUNT, expected 2"; ok=false
+    fi
+    if (( rc != 0 )); then
+        fail "stop_vms_parallel returned $rc"; ok=false
+    fi
+    if [[ ! -f "$run_a/stop.log" || ! -f "$run_b/stop.log" ]]; then
+        fail "per-VM stop.log missing"; ok=false
+    fi
+    $ok && pass "both VMs stopped, count and logs correct"
+
+    kill "$pid_a" "$vfs_a" "$pid_b" "$vfs_b" 2>/dev/null || true
+    wait "$pid_a" "$vfs_a" "$pid_b" "$vfs_b" 2>/dev/null || true
+    teardown_test_env
+}
+
+# ============================================================================
+# Test 18: stop_vms_parallel reports failed VMs
+# ============================================================================
+test_stop_vms_parallel_failure() {
+    echo "Test 18: stop_vms_parallel reports failures"
+    setup_test_env
+
+    local proj="/tmp/test-par-fail-$$"
+    setup_fake_vm "$proj"
+    local run_dir
+    run_dir="$(project_run_dir "$proj")"
+
+    local orig_def
+    orig_def="$(declare -f stop_vm_by_run_dir)"
+    stop_vm_by_run_dir() { return 1; }
+
+    stop_vms_parallel "$run_dir" >/dev/null 2>&1
+    local rc=$?
+
+    eval "$orig_def"
+
+    local ok=true
+    if (( rc == 0 )); then
+        fail "expected non-zero return code"; ok=false
+    fi
+    if (( ${#FAILED_RUN_DIRS[@]} != 1 )); then
+        fail "FAILED_RUN_DIRS has ${#FAILED_RUN_DIRS[@]} entries, expected 1"; ok=false
+    fi
+    if (( STOPPED_COUNT != 0 )); then
+        fail "STOPPED_COUNT=$STOPPED_COUNT, expected 0"; ok=false
+    fi
+    $ok && pass "failure surfaced via return code and FAILED_RUN_DIRS"
+
+    cleanup_fake_vm
+    teardown_test_env
+}
+
+# ============================================================================
 # Run all tests
 # ============================================================================
 echo "=== claude-vm shutdown tests ==="
@@ -538,6 +649,9 @@ test_cmd_stop_all
 test_cmd_stop_all_none_running
 test_cmd_stop_all_skips_stale
 test_cmd_stop_all_preserves_snapshots
+test_shutdown_no_save_state_output
+test_stop_vms_parallel
+test_stop_vms_parallel_failure
 
 echo ""
 echo "=== Results: $TESTS_PASSED/$TESTS_RUN passed, $TESTS_FAILED failed ==="

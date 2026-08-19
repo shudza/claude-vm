@@ -280,7 +280,7 @@ cmd_stop() {
             return 0
         fi
 
-        local stopped=0
+        local running_dirs=()
         for run_subdir in "$RUN_DIR"/*/; do
             [[ -d "$run_subdir" ]] || continue
             local pid_file="${run_subdir}qemu.pid"
@@ -288,23 +288,19 @@ cmd_stop() {
             local pid
             pid=$(cat "$pid_file" 2>/dev/null) || continue
             kill -0 "$pid" 2>/dev/null || continue
-
-            # Recover project dir from hash
-            local hash
-            hash=$(basename "$run_subdir")
-            local project_file="$SNAPSHOTS_DIR/${hash}.project"
-            local label="$hash"
-            [[ -f "$project_file" ]] && label="$(cat "$project_file")"
-
-            echo "Stopping: $label"
-            stop_vm_by_run_dir "$run_subdir" || true
-            (( ++stopped ))
+            running_dirs+=("$run_subdir")
         done
 
-        if (( stopped == 0 )); then
+        if (( ${#running_dirs[@]} == 0 )); then
             echo "No running VMs."
         else
-            echo "Stopped $stopped VM(s)."
+            ui_init "$RUN_DIR/stop-all.log"
+            stop_vms_parallel "${running_dirs[@]}" || true
+            local failed_dir
+            for failed_dir in "${FAILED_RUN_DIRS[@]}"; do
+                ui_warn "Failed to stop VM $(basename "${failed_dir%/}") — see ${failed_dir%/}/stop.log"
+            done
+            echo "Stopped $STOPPED_COUNT VM(s)."
         fi
     else
         stop_vm "$project_dir"

@@ -278,8 +278,6 @@ launch_vm() {
     local project_dir="${1:-$PWD}"
     shift 2>/dev/null || true
     local claude_extra_args=("$@")
-    local start_time
-    start_time=$(date +%s)
 
     load_config
     ensure_dirs
@@ -386,9 +384,6 @@ launch_vm() {
     if declare -f _has_pending_restore &>/dev/null && _has_pending_restore "$project_dir"; then
         ui_phase "Restoring VM state from rebase" _restore_one_vm "$project_dir" "$ssh_port"
     fi
-
-    local elapsed=$(( $(date +%s) - start_time ))
-    ui_done "Ready in ${elapsed}s — $(basename "$project_dir")"
 
     # Drop into Claude Code
     connect_vm "$ssh_port" "${claude_extra_args[@]}"

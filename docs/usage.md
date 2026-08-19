@@ -266,7 +266,8 @@ defaults < config file < environment variables
 | `CLAUDE_ARGS` | Override args passed to `claude` (default: `--dangerously-skip-permissions`) |
 | `REBASE_BACKUP_PATHS` | Override extra paths preserved through `rebase` |
 | `CLAUDE_VM_VERBOSE` | Set to `true` to show all output (no spinner) |
-| `CLAUDE_VM_QUIET` | Set to `true` to suppress spinner |
+| `CLAUDE_VM_QUIET` | Set to `true` to suppress the redrawing status line (one plain line per phase) |
+| `CLAUDE_VM_FORCE_TTY` | Set to `true` to force the interactive single-line output without a tty (used by tests) |
 
 ## Flavors
 

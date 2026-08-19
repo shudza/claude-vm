@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 # ui.sh — Clean console output for claude-vm
 #
-# Provides a spinner that hides technical output behind a single status line.
-# All stdout/stderr from wrapped commands goes to a log file.
-# On success: spinner completes with ✓
-# On failure: spinner shows ✗, prints log path, and tails recent errors
+# Provides a single status line that redraws in place with a spinner,
+# hiding technical output behind it. All stdout/stderr from wrapped
+# commands goes to a log file.
+#
+# Rendering modes (decided once in ui_init):
+#   rich    — interactive terminal: one transient line redraws per phase;
+#             successful phases leave no output behind
+#   plain   — non-tty / CLAUDE_VM_QUIET: one permanent line per phase (✓/✗)
+#   verbose — CLAUDE_VM_VERBOSE: phase headers plus full command output
+# On failure: a ✗ line is committed in every mode, with log path and tail.
 #
 # Usage:
 #   ui_init "/path/to/logfile"
@@ -21,6 +27,8 @@ _UI_SPINNER_PID=""
 _UI_SPINNER_FRAMES=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
 _UI_QUIET="${CLAUDE_VM_QUIET:-false}"
 _UI_VERBOSE="${CLAUDE_VM_VERBOSE:-false}"
+_UI_RICH=false
+_UI_PROGRESS_I=0
 
 # ── Init / Teardown ─────────────────────────────────────────────────────────
 
@@ -31,8 +39,21 @@ ui_init() {
     mkdir -p "$(dirname "$_UI_LOG")"
     : > "$_UI_LOG"  # truncate
 
-    # Clean up spinner on exit/interrupt
-    trap '_ui_stop_spinner' EXIT INT TERM
+    _UI_RICH=false
+    if [[ "$_UI_QUIET" != "true" && "$_UI_VERBOSE" != "true" ]]; then
+        # UI output goes to stderr, so the tty check is on fd 2;
+        # CLAUDE_VM_FORCE_TTY lets tests exercise rich mode without a tty
+        if [[ -t 2 || "${CLAUDE_VM_FORCE_TTY:-}" == "true" ]]; then
+            _UI_RICH=true
+        fi
+    fi
+
+    # Clean up spinner on exit/interrupt — but only when the caller doesn't
+    # already own the EXIT trap (rebase chains _ui_stop_spinner into its
+    # lock-release trap, which must not be clobbered)
+    if [[ -z "$(trap -p EXIT)" ]]; then
+        trap '_ui_stop_spinner' EXIT INT TERM
+    fi
 }
 
 # ── Spinner ──────────────────────────────────────────────────────────────────
@@ -40,8 +61,7 @@ ui_init() {
 _ui_start_spinner() {
     local msg="$1"
 
-    # Don't spin if not a terminal or in quiet mode
-    if [[ ! -t 1 ]] || [[ "$_UI_QUIET" == "true" ]]; then
+    if [[ "${_UI_RICH:-false}" != "true" ]]; then
         return
     fi
 
@@ -49,7 +69,7 @@ _ui_start_spinner() {
         local i=0
         local n=${#_UI_SPINNER_FRAMES[@]}
         while true; do
-            printf '\r  %s %s' "${_UI_SPINNER_FRAMES[$((i % n))]}" "$msg" >&2
+            printf '\r\033[K  %s %s' "${_UI_SPINNER_FRAMES[$((i % n))]}" "$msg" >&2
             sleep 0.08
             (( i++ )) || true
         done
@@ -64,7 +84,7 @@ _ui_stop_spinner() {
         wait "$_UI_SPINNER_PID" 2>/dev/null || true
         _UI_SPINNER_PID=""
         # Clear the spinner line
-        if [[ -t 1 ]]; then
+        if [[ "${_UI_RICH:-false}" == "true" ]]; then
             printf '\r\033[K' >&2
         fi
     fi
@@ -94,7 +114,11 @@ ui_phase() {
     _ui_stop_spinner
 
     if (( rc == 0 )); then
-        printf '  \033[32m✓\033[0m %s\n' "$msg" >&2
+        # Rich mode: success leaves nothing behind — the next phase (or
+        # ui_done) redraws in place of the cleared spinner line
+        if [[ "$_UI_RICH" != "true" ]]; then
+            printf '  \033[32m✓\033[0m %s\n' "$msg" >&2
+        fi
     else
         printf '  \033[31m✗\033[0m %s\n' "$msg" >&2
         _ui_show_error "$rc"
@@ -103,12 +127,38 @@ ui_phase() {
     return "$rc"
 }
 
+# ── Progress line (parent-driven, for parallel waits) ───────────────────────
+
+# Redraw a transient progress line. Call repeatedly while polling.
+# Must not be used while a ui_phase spinner is running.
+# Args: $1 = display message
+ui_progress() {
+    local msg="$1"
+    if [[ "$_UI_RICH" != "true" ]]; then
+        return 0
+    fi
+    local n=${#_UI_SPINNER_FRAMES[@]}
+    printf '\r\033[K  %s %s' "${_UI_SPINNER_FRAMES[$((_UI_PROGRESS_I % n))]}" "$msg" >&2
+    (( _UI_PROGRESS_I++ )) || true
+}
+
+# Clear the transient progress line
+ui_progress_clear() {
+    if [[ "$_UI_RICH" == "true" ]]; then
+        printf '\r\033[K' >&2
+    fi
+}
+
 # ── Status messages ──────────────────────────────────────────────────────────
 
 # Print a success summary line
 ui_done() {
     local msg="$1"
-    printf '\n  \033[32m%s\033[0m\n\n' "$msg" >&2
+    if [[ "$_UI_RICH" == "true" ]]; then
+        printf '  \033[32m%s\033[0m\n' "$msg" >&2
+    else
+        printf '\n  \033[32m%s\033[0m\n\n' "$msg" >&2
+    fi
 }
 
 # Print an info line (not a phase, just context)
