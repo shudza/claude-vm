@@ -67,7 +67,7 @@ Configuration:
     FLAVOR          Base image flavor (default: debian-slim)
     VM_USER         Guest username (default: $USER)
     VM_RAM          RAM allocation (default: 4G)
-    VM_CPUS         CPU cores (default: 2)
+    VM_CPUS         CPU cores (default: 4, clamped to host cores)
     SSH_PORT_BASE   Starting SSH port (default: 10022)
     FORWARD_PORTS   Extra ports to forward (e.g., 8080,3000:3000,9000-9002)
     CLAUDE_ARGS     Args passed to claude (default: --dangerously-skip-permissions)
@@ -147,7 +147,7 @@ cmd_config() {
 # Uncomment and modify values as needed.
 
 # VM_RAM="4G"
-# VM_CPUS="2"
+# VM_CPUS="4"
 # SSH_PORT_BASE="10022"
 DEFAULTS
             fi
@@ -259,7 +259,7 @@ cmd_ssh() {
         return 1
     fi
 
-    connect_vm_shell "$(get_project_ssh_port "$project_dir")"
+    connect_vm_shell "$(get_project_ssh_port "$project_dir")" "$project_dir"
 }
 
 # Stop command

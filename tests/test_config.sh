@@ -21,6 +21,13 @@ run_test() { "$@"; }
 TEST_DIR=$(mktemp -d)
 trap 'rm -rf "$TEST_DIR"' EXIT
 
+# Expected builtin CPU default: 4, clamped to the host's core count
+_expected_default_cpus() {
+    local host
+    host="$(nproc 2>/dev/null || echo 4)"
+    (( host < 4 )) && echo "$host" || echo 4
+}
+
 # Helper: reset config state for each test
 _reset_config_env() {
     unset VM_RAM VM_CPUS SSH_PORT_BASE BASE_IMAGE_URL BASE_IMAGE_NAME CLAUDE_ARGS REBASE_BACKUP_PATHS 2>/dev/null || true
@@ -42,10 +49,10 @@ test_defaults_without_config_file() {
         fail "default RAM" "expected 4G, got $VM_RAM"
     fi
 
-    if [[ "$VM_CPUS" == "2" ]]; then
-        pass "default CPUs is 2"
+    if [[ "$VM_CPUS" == "$(_expected_default_cpus)" ]]; then
+        pass "default CPUs is 4 (clamped to host cores)"
     else
-        fail "default CPUs" "expected 2, got $VM_CPUS"
+        fail "default CPUs" "expected $(_expected_default_cpus), got $VM_CPUS"
     fi
 
     if [[ "$SSH_PORT_BASE" == "10022" ]]; then
@@ -167,10 +174,10 @@ EOF
         fail "partial config RAM" "expected 6G, got $VM_RAM"
     fi
 
-    if [[ "$VM_CPUS" == "2" ]]; then
+    if [[ "$VM_CPUS" == "$(_expected_default_cpus)" ]]; then
         pass "partial config leaves CPUs at default"
     else
-        fail "partial config CPUs default" "expected 2, got $VM_CPUS"
+        fail "partial config CPUs default" "expected $(_expected_default_cpus), got $VM_CPUS"
     fi
     _reset_config_env
 }
@@ -819,6 +826,64 @@ test_base_image_path_is_flavor_keyed() {
     unset FLAVOR 2>/dev/null || true
 }
 
+test_default_cpus_clamped_to_host() {
+    _reset_config_env
+    export CLAUDE_VM_DIR="$TEST_DIR/test-cpu-clamp"
+    export CLAUDE_VM_CONFIG="$CLAUDE_VM_DIR/config"
+    local fake_bin="$TEST_DIR/fake-nproc"
+    mkdir -p "$fake_bin"
+
+    source "$PROJECT_DIR/lib/config.sh"
+
+    printf '#!/bin/sh\necho 2\n' > "$fake_bin/nproc"; chmod +x "$fake_bin/nproc"
+    PATH="$fake_bin:$PATH" load_config
+    if [[ "$VM_CPUS" == "2" ]]; then
+        pass "default CPUs clamp to nproc on a 2-core host"
+    else
+        fail "default CPUs clamp" "expected 2, got $VM_CPUS"
+    fi
+
+    unset VM_CPUS
+    printf '#!/bin/sh\necho 32\n' > "$fake_bin/nproc"
+    PATH="$fake_bin:$PATH" load_config
+    if [[ "$VM_CPUS" == "4" ]]; then
+        pass "default CPUs stay at 4 on a large host"
+    else
+        fail "default CPUs large host" "expected 4, got $VM_CPUS"
+    fi
+
+    unset VM_CPUS
+    printf '#!/bin/sh\nexit 1\n' > "$fake_bin/nproc"
+    PATH="$fake_bin:$PATH" load_config
+    if [[ "$VM_CPUS" == "4" ]]; then
+        pass "default CPUs fall back to 4 when nproc is unavailable"
+    else
+        fail "default CPUs nproc failure" "expected 4, got $VM_CPUS"
+    fi
+
+    unset VM_CPUS
+    printf '#!/bin/sh\necho 2\n' > "$fake_bin/nproc"
+    mkdir -p "$CLAUDE_VM_DIR"
+    echo 'VM_CPUS="8"' > "$CLAUDE_VM_CONFIG"
+    PATH="$fake_bin:$PATH" load_config
+    if [[ "$VM_CPUS" == "8" ]]; then
+        pass "config-file VM_CPUS is never clamped"
+    else
+        fail "config-file VM_CPUS clamp" "expected 8, got $VM_CPUS"
+    fi
+
+    export VM_CPUS="6"
+    PATH="$fake_bin:$PATH" load_config
+    if [[ "$VM_CPUS" == "6" ]]; then
+        pass "env VM_CPUS is never clamped"
+    else
+        fail "env VM_CPUS clamp" "expected 6, got $VM_CPUS"
+    fi
+
+    rm -rf "$fake_bin"
+    _reset_config_env
+}
+
 # ─── Run ──────────────────────────────────────────────────────────────────────
 
 echo "=== claude-vm config tests ==="
@@ -829,6 +894,7 @@ run_test test_config_file_overrides_defaults
 run_test test_env_vars_override_config_file
 run_test test_env_vars_override_defaults
 run_test test_partial_config_file
+run_test test_default_cpus_clamped_to_host
 run_test test_set_config_value_creates_file
 run_test test_set_config_value_updates_existing
 run_test test_set_config_rejects_invalid_key

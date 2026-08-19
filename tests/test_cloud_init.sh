@@ -219,6 +219,17 @@ test_full_includes_build_tools() {
     done
 }
 
+test_glab_full_only() {
+    local flavor ok=true
+    for flavor in debian-full ubuntu-full archlinux-full fedora-full; do
+        _has_pkg "$flavor" "glab" || { fail "$flavor full" "glab missing"; ok=false; }
+    done
+    for flavor in debian-slim ubuntu-slim archlinux-slim fedora-slim; do
+        _has_pkg "$flavor" "glab" && { fail "$flavor slim" "glab present in slim"; ok=false; }
+    done
+    $ok && pass "glab in every -full packages block, absent from -slim"
+}
+
 test_slim_core_set() {
     local flavor python_pkg ok
     for flavor in "${ALL_FLAVORS[@]}"; do
@@ -295,6 +306,7 @@ run_test test_installer_prefetch
 run_test test_tuning_precedes_packages_stage
 run_test test_slim_excludes_full_tools
 run_test test_full_includes_build_tools
+run_test test_glab_full_only
 run_test test_slim_core_set
 run_test test_installers_still_present
 run_test test_bare_flavor_behaves_as_full

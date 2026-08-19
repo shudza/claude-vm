@@ -81,7 +81,7 @@ FAKE_PROJECT_A=""
 FAKE_PROJECT_B=""
 
 setup_e2e() {
-    E2E_DIR="$(mktemp -d /tmp/claude-vm-e2e-arch-XXXXXX)"
+    E2E_DIR="$(mktemp -d "${TMPDIR:-/tmp}/claude-vm-e2e-arch-XXXXXX")"
     export CLAUDE_VM_DIR="$E2E_DIR/data"
     export SSH_PORT_BASE=16022
     export FLAVOR=archlinux-slim

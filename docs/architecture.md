@@ -14,7 +14,7 @@ Host (Linux)
   |     +-- virtiofs mount (/workspace)
   |     +-- Claude Code (--dangerously-skip-permissions)
   |
-  +-- rsync over SSH       Syncs ~/.claude/, ~/.gitconfig, ~/.config/gh/
+  +-- rsync over SSH       Syncs ~/.claude/, ~/.gitconfig, ~/.config/gh/, ~/.config/glab-cli/
 ```
 
 ## Snapshot Strategy
@@ -43,8 +43,8 @@ base-debian-full.qcow2 (golden image, ~1.5GB)
 6. Launch QEMU (daemonized) with KVM acceleration, virtiofs, and SSH port forwarding
 7. Wait for SSH to become available (polls up to 60s)
 8. Verify virtiofs mount in guest (mount test + read/write verification)
-9. Sync host config into guest via rsync (~/.claude/, ~/.gitconfig, ~/.config/gh/)
-10. `exec` into SSH session running Claude Code
+9. Sync host config into guest via rsync (~/.claude/, ~/.gitconfig, ~/.config/gh/, ~/.config/glab-cli/)
+10. `exec` into SSH session running Claude Code, with `CLAUDE_CODE_PROJECT_DIR_NAME` set to the sanitized project basename so the guest's transcript dir is `~/.claude/projects/<name>` rather than `-workspace` (`claude-vm ssh` shells get the same export)
 
 All output goes to `~/.claude-vm/run/<hash>/launch.log`. In an interactive terminal
 the user sees a single status line that redraws in place per phase (spinner + phase
@@ -79,7 +79,7 @@ with the log path and a tail of recent errors.
 
 `claude-vm rebase` rebuilds the base image from the latest cloud image while preserving per-VM state:
 
-1. **Extract:** For each project, boot the VM headless (no virtiofs — `workspace.mount` uses `nofail`), rsync persistent state (`~/.claude/`, `~/.gitconfig`, `~/.config/gh/`) to `~/.claude-vm/backups/<hash>/`, fast shutdown. Paths from `REBASE_BACKUP_PATHS` are copied in a second pass as root (`--rsync-path="sudo rsync"`) with perms/ownership preserved via `--fake-super` xattrs, and recorded in a `.rebase-paths` manifest inside the backup
+1. **Extract:** For each project, boot the VM headless (no virtiofs — `workspace.mount` uses `nofail`), rsync persistent state (`~/.claude/`, `~/.claude.json`, `~/.gitconfig`, `~/.config/gh/`, `~/.config/glab-cli/`) to `~/.claude-vm/backups/<hash>/`, fast shutdown. Runtime state under `~/.claude/` is excluded (`daemon/`, `jobs/`, `sessions/`, `session-env/`, `shell-snapshots/`, `paste-cache/`, `tasks/`, `telemetry/`, `cache/`, `downloads/`, `backups/`, `file-history/` and a few cache files) so stale daemon locks and worker rosters never reach the fresh VM; transcripts (`projects/`), `plans/`, `history.jsonl` and all config are kept. Paths from `REBASE_BACKUP_PATHS` are copied in a second pass as root (`--rsync-path="sudo rsync"`) with perms/ownership preserved via `--fake-super` xattrs, and recorded in a `.rebase-paths` manifest inside the backup
 2. **Destroy:** Remove all `<hash>.qcow2` snapshots (preserve `.project` and `.ports` sidecars), remove old base image and cached cloud image
 3. **Rebuild:** `build_base_image()` downloads the latest cloud image and provisions from scratch
 4. **Restore (lazy):** On next `launch_vm()`, if `~/.claude-vm/backups/<hash>/` exists, rsync its contents into the freshly created VM, then remove the backup directory. Manifest paths are pushed as root with perms/ownership restored, as an overlay (no `--delete`) so files the fresh image ships survive
@@ -102,12 +102,13 @@ On each launch, rsync transfers host config into the guest:
 
 | Source | Destination | Purpose |
 |-|-|-|
-| `~/.claude/` | `~/.claude/` | Claude Code settings, credentials, plugins |
-| `~/.claude.json` | `~/.claude.json` | Theme, onboarding state |
+| `~/.claude/` | `~/.claude/` | Claude Code settings, credentials, plugins, skills, agents, commands, workflows, keybindings |
+| `~/.claude.json` | `~/.claude/.claude.json` | Theme, onboarding state, user-scope MCP servers (Claude Code reads it from `$CLAUDE_CONFIG_DIR` in the guest) |
 | `~/.gitconfig` | `~/.gitconfig` | Git identity and preferences |
 | `~/.config/gh/` | `~/.config/gh/` | GitHub CLI auth tokens |
+| `~/.config/glab-cli/` | `~/.config/glab-cli/` | GitLab CLI auth tokens (`glab` itself ships in `-full` flavors) |
 
-The `~/.claude/` sync excludes ephemeral data: sessions, cache, debug logs, tasks, history, backups.
+The `~/.claude/` sync is an include-list (`settings.json`, credentials, `plugins/`, `skills/`, `agents/`, `commands/`, `workflows/`, `keybindings.json`, `mcp.json`, `CLAUDE.md`, `statusline-command.sh`); everything else -- sessions, cache, daemon state, tasks, history, backups -- stays on the host.
 
 Rsync is incremental -- after the first launch, only changed files transfer.
 
@@ -141,7 +142,7 @@ Only **user-scoped** MCP servers carry over automatically. For a server you want
   backups/
     <hash>/                 Per-project state extracted during rebase (removed after restore)
       .claude/              Claude Code settings, credentials, plugins
-      .claude.json          Theme, onboarding state
+      .claude/.claude.json  Theme, onboarding state
       .config/gh/           GitHub CLI auth tokens
       .gitconfig            Git identity
       .rebase-paths         Manifest of extracted REBASE_BACKUP_PATHS entries

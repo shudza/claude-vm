@@ -22,7 +22,41 @@ _REBASE_GUEST_PATHS=(
     ".claude.json"
     ".gitconfig"
     ".config/gh/"
+    ".config/glab-cli/"
 )
+
+# Runtime state under ~/.claude/ that must not be carried into a fresh VM:
+# daemon locks/worker rosters with OS-reused PIDs break background agents,
+# and caches/session scratch are worthless after a rebase. An exclude list
+# (not an include list) so new upstream dirs are preserved by default.
+# Kept: projects/ (transcripts), plans/, history.jsonl, all config.
+_REBASE_CLAUDE_EXCLUDES=(
+    "daemon/"
+    "jobs/"
+    "sessions/"
+    "session-env/"
+    "shell-snapshots/"
+    "paste-cache/"
+    "tasks/"
+    "telemetry/"
+    "cache/"
+    "downloads/"
+    "backups/"
+    "file-history/"
+    ".last-cleanup"
+    ".last-update-result.json"
+    "gh-pr-status-cache.json"
+)
+
+# Emit rsync --exclude args for a builtin guest path (only .claude/ has any).
+# Args: $1 = entry from _REBASE_GUEST_PATHS
+_rebase_excludes_for() {
+    local path="$1" ex
+    [[ "$path" == ".claude/" ]] || return 0
+    for ex in "${_REBASE_CLAUDE_EXCLUDES[@]}"; do
+        echo "--exclude=/$ex"
+    done
+}
 
 # ── Concurrency lock ────────────────────────────────────────────────────────
 
@@ -128,6 +162,7 @@ _rebase_preserved_desc() {
             desc+="${desc:+, }~/$upath"
         fi
     done < <(_rebase_user_paths)
+    desc+=" (excluding ~/.claude/ runtime state: daemon, jobs, sessions, caches)"
     echo "$desc"
 }
 
@@ -241,7 +276,9 @@ _extract_one_vm() {
         else
             mkdir -p "$(dirname "$dest")"
         fi
-        _safe_rsync "$log_file" "${_rsync_cmd[@]}" \
+        local -a excludes=()
+        mapfile -t excludes < <(_rebase_excludes_for "$path")
+        _safe_rsync "$log_file" "${_rsync_cmd[@]}" "${excludes[@]}" \
             "$VM_USER@localhost:~/$path" "$dest" \
             || (( ++rsync_fail ))
     done
@@ -333,6 +370,17 @@ _restore_one_vm() {
             fi
         fi
     done
+
+    # Migration: VMs from before CLAUDE_CONFIG_DIR was exported kept the live
+    # global config at ~/.claude.json. Claude Code now reads it from
+    # ~/.claude/.claude.json, so seed that path from the legacy file when the
+    # backup doesn't already carry one (never clobber a config-dir copy).
+    if [[ -f "$backup_dir/.claude.json" && ! -f "$backup_dir/.claude/.claude.json" ]]; then
+        if ! _safe_rsync "$restore_log" "${_rsync_cmd[@]}" \
+            "$backup_dir/.claude.json" "$VM_USER@localhost:~/.claude/.claude.json"; then
+            ui_warn "restore: failed to migrate .claude.json to ~/.claude/ (see $restore_log)"
+        fi
+    fi
 
     # User-configured paths recorded at extraction time. Pushed as root with
     # perms/ownership preserved, as an overlay (no --delete) so files the

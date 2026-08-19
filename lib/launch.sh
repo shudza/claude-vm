@@ -29,26 +29,63 @@ _build_ssh_cmd() {
     )
 }
 
+# Name Claude Code uses for the guest's ~/.claude/projects/<name> transcript
+# dir. Every project mounts at /workspace, so without this every VM would
+# write to ~/.claude/projects/-workspace. Claude Code (2.1.236) accepts the
+# name only when it matches ^[A-Za-z0-9_-]{1,64}$ and is not a Windows
+# reserved device name — anything else is silently ignored — so the basename
+# is squeezed into exactly that shape here.
+# Args: $1 = project directory
+_guest_project_dir_name() {
+    local project_dir="$1"
+    local name
+    name="$(basename "$(cd "$project_dir" 2>/dev/null && pwd || echo "$project_dir")")"
+    name="${name//[^A-Za-z0-9_-]/}"
+    name="${name:0:64}"
+    case "${name,,}" in
+        con|prn|aux|nul|com[0-9]|lpt[0-9]) name="" ;;
+    esac
+    [[ -n "$name" ]] || name="workspace"
+    echo "$name"
+}
+
+# Remote-command prefix shared by connect_vm and connect_vm_shell. Exports
+# come before ~/.env is sourced so a user's ~/.env can still override them.
+# CLAUDE_CONFIG_DIR is set to its default location because Claude Code only
+# honors CLAUDE_CODE_PROJECT_DIR_NAME when a config dir is explicitly set
+# (verified against the 2.1.236 binary).
+# Args: $1 = project directory
+_guest_env_prefix() {
+    local project_dir="$1"
+    local dir_name
+    dir_name="$(_guest_project_dir_name "$project_dir")"
+    echo "export PATH=\"\$HOME/.local/bin:\$PATH\"; export COLORTERM=truecolor; export CLAUDE_CONFIG_DIR=\"\$HOME/.claude\"; export CLAUDE_CODE_PROJECT_DIR_NAME=\"$dir_name\"; cd /workspace 2>/dev/null; [ -f ~/.env ] && . ~/.env;"
+}
+
 # Connect to a running VM — launches Claude Code by default
-# Args: $1 = SSH port, remaining args passed to claude
+# Args: $1 = SSH port, $2 = project directory, remaining args passed to claude
 connect_vm() {
     local port="$1"
-    shift
+    local project_dir="$2"
+    shift 2
     _build_ssh_cmd "$port"
     local claude_args="$CLAUDE_ARGS"
     if [[ $# -gt 0 ]]; then
         claude_args="$claude_args $*"
     fi
     exec "${_ssh_cmd[@]}" -t \
-        "export PATH=\"\$HOME/.local/bin:\$PATH\"; export COLORTERM=truecolor; cd /workspace 2>/dev/null; [ -f ~/.env ] && . ~/.env; exec claude $claude_args"
+        "$(_guest_env_prefix "$project_dir") exec claude $claude_args"
 }
 
-# Connect to a running VM shell (no Claude Code)
-# Args: $1 = SSH port
+# Connect to a running VM shell (no Claude Code). Same environment as
+# connect_vm so `claude` started by hand lands in the same transcript dir.
+# Args: $1 = SSH port, $2 = project directory
 connect_vm_shell() {
     local port="$1"
+    local project_dir="$2"
     _build_ssh_cmd "$port"
-    exec "${_ssh_cmd[@]}"
+    exec "${_ssh_cmd[@]}" -t \
+        "$(_guest_env_prefix "$project_dir") exec \"\${SHELL:-/bin/bash}\" -l"
 }
 
 # Build rsync command that tunnels over the VM's SSH connection
@@ -80,7 +117,7 @@ _build_rsync_sudo_cmd() {
 }
 
 # Sync host config into the guest VM
-# Syncs: ~/.claude/, ~/.claude.json, ~/.gitconfig, ~/.config/gh/
+# Syncs: ~/.claude/, ~/.claude.json, ~/.gitconfig, ~/.config/gh/, ~/.config/glab-cli/
 # Uses rsync for incremental transfer (only changed files after first launch)
 sync_claude_config_to_vm() {
     local port="$1"
@@ -90,7 +127,8 @@ sync_claude_config_to_vm() {
     _build_rsync_cmd "$port"
 
     # ── Claude Code config ────────────────────────────────────────────────
-    # Include-list: only sync skills, plugins, auth, and settings
+    # Include-list: settings, auth, and user-scope customizations (plugins,
+    # skills, agents, commands, workflows, keybindings) — never runtime state
     if [[ -d "$HOME/.claude" ]]; then
         "${_rsync_cmd[@]}" \
             --include='settings.json' \
@@ -98,6 +136,10 @@ sync_claude_config_to_vm() {
             --include='credentials.json' \
             --include='plugins/***' \
             --include='skills/***' \
+            --include='agents/***' \
+            --include='commands/***' \
+            --include='workflows/***' \
+            --include='keybindings.json' \
             --include='mcp.json' \
             --include='CLAUDE.md' \
             --include='statusline-command.sh' \
@@ -105,15 +147,19 @@ sync_claude_config_to_vm() {
             "$HOME/.claude/" "$VM_USER@localhost:~/.claude/" 2>/dev/null
     fi
 
-    # ~/.claude.json (theme, onboarding state — skips welcome wizard)
+    # Host ~/.claude.json (theme, onboarding state — skips welcome wizard)
+    # → guest ~/.claude/.claude.json: connect_vm exports CLAUDE_CONFIG_DIR, and
+    # with a config dir set Claude Code reads the global config json from
+    # $CLAUDE_CONFIG_DIR/.claude.json instead of ~/.claude.json.
     # Also carries user-scoped MCP servers (top-level mcpServers). Local-scoped
     # MCP servers live under projects[<host-path>] and do NOT resolve in the guest
     # because the project mounts at /workspace — re-add those with `claude mcp add`
     # inside the VM, or define them user-scoped (-s user). See docs/architecture.md.
+    "${ssh_cmd[@]}" "mkdir -p ~/.claude" 2>/dev/null
     if [[ -f "$HOME/.claude.json" ]]; then
-        "${_rsync_cmd[@]}" "$HOME/.claude.json" "$VM_USER@localhost:~/.claude.json" 2>/dev/null
+        "${_rsync_cmd[@]}" "$HOME/.claude.json" "$VM_USER@localhost:~/.claude/.claude.json" 2>/dev/null
     else
-        "${ssh_cmd[@]}" "echo '{\"hasCompletedOnboarding\":true}' > ~/.claude.json" 2>/dev/null
+        "${ssh_cmd[@]}" "echo '{\"hasCompletedOnboarding\":true}' > ~/.claude/.claude.json" 2>/dev/null
     fi
 
     # ── Git config ────────────────────────────────────────────────────────
@@ -132,6 +178,14 @@ sync_claude_config_to_vm() {
     if [[ -d "$gh_config" ]]; then
         "${ssh_cmd[@]}" "mkdir -p ~/.config/gh" 2>/dev/null
         "${_rsync_cmd[@]}" "$gh_config/" "$VM_USER@localhost:~/.config/gh/" 2>/dev/null
+    fi
+
+    # ── GitLab CLI auth ───────────────────────────────────────────────────
+    # glab auth tokens — needed for MR/issue operations
+    local glab_config="${XDG_CONFIG_HOME:-$HOME/.config}/glab-cli"
+    if [[ -d "$glab_config" ]]; then
+        "${ssh_cmd[@]}" "mkdir -p ~/.config/glab-cli" 2>/dev/null
+        "${_rsync_cmd[@]}" "$glab_config/" "$VM_USER@localhost:~/.config/glab-cli/" 2>/dev/null
     fi
 }
 
@@ -294,7 +348,7 @@ launch_vm() {
         local ssh_port
         ssh_port="$(get_project_ssh_port "$project_dir")"
         ui_info "Attaching to running VM..."
-        connect_vm "$ssh_port" "${claude_extra_args[@]}"
+        connect_vm "$ssh_port" "$project_dir" "${claude_extra_args[@]}"
     fi
 
     # Acquire shared lock — prevents concurrent rebase from clobbering the base
@@ -387,7 +441,7 @@ launch_vm() {
     fi
 
     # Drop into Claude Code
-    connect_vm "$ssh_port" "${claude_extra_args[@]}"
+    connect_vm "$ssh_port" "$project_dir" "${claude_extra_args[@]}"
 }
 
 # Start virtiofsd for a project directory

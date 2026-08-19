@@ -290,6 +290,8 @@ PKG
   - iputils-ping
   - socat
   - patch
+  # GitLab CLI (same credential handling as gh in Claude Code)
+  - glab
   # Utilities
   - tmux
   - vim-tiny
@@ -315,6 +317,8 @@ PKG
   - iputils-ping
   - socat
   - patch
+  # GitLab CLI (same credential handling as gh in Claude Code)
+  - glab
   # Utilities
   - tmux
   - vim
@@ -340,6 +344,8 @@ PKG
   - iputils
   - socat
   - patch
+  # GitLab CLI (same credential handling as gh in Claude Code)
+  - glab
   # Utilities
   - tmux
   - tree
@@ -366,6 +372,8 @@ PKG
   - iputils
   - socat
   - patch
+  # GitLab CLI (same credential handling as gh in Claude Code)
+  - glab
   # Utilities
   - tmux
   - tree

@@ -2,7 +2,7 @@
 # test_e2e.sh — End-to-end tests for claude-vm
 #
 # Runs real QEMU VMs with virtiofs, testing the full CLI workflow:
-#   build → launch → use → stop → resume → reset → destroy
+#   build → launch → config sync → use → stop → resume → rebase → reset → destroy → full flavor
 #
 # Prerequisites: /dev/kvm, qemu-system-x86_64, virtiofsd, genisoimage, etc.
 # Skips gracefully (exit 0) if prerequisites are missing.
@@ -84,9 +84,10 @@ E2E_DIR=""
 FAKE_PROJECT_A=""
 FAKE_PROJECT_B=""
 FAKE_PROJECT_C=""
+FAKE_PROJECT_D=""
 
 setup_e2e() {
-    E2E_DIR="$(mktemp -d /tmp/claude-vm-e2e-XXXXXX)"
+    E2E_DIR="$(mktemp -d "${TMPDIR:-/tmp}/claude-vm-e2e-XXXXXX")"
     export CLAUDE_VM_DIR="$E2E_DIR/data"
     export SSH_PORT_BASE=15022
     export CLAUDE_VM_QUIET=true
@@ -94,7 +95,8 @@ setup_e2e() {
     FAKE_PROJECT_A="$E2E_DIR/project-a"
     FAKE_PROJECT_B="$E2E_DIR/project-b"
     FAKE_PROJECT_C="$E2E_DIR/project-c"
-    mkdir -p "$FAKE_PROJECT_A" "$FAKE_PROJECT_B" "$FAKE_PROJECT_C"
+    FAKE_PROJECT_D="$E2E_DIR/project-d"
+    mkdir -p "$FAKE_PROJECT_A" "$FAKE_PROJECT_B" "$FAKE_PROJECT_C" "$FAKE_PROJECT_D"
     echo "hello from project A" > "$FAKE_PROJECT_A/testfile.txt"
     echo "hello from project B" > "$FAKE_PROJECT_B/testfile.txt"
     echo "hello from project C" > "$FAKE_PROJECT_C/testfile.txt"
@@ -336,6 +338,107 @@ phase_launch() {
     else
         fail "Claude Code not installed in VM" "claude binary not found in PATH or ~/.local/bin"
     fi
+
+    # Test: default CPU count reaches the guest (4, clamped to host cores)
+    local host_cpus expected_cpus guest_cpus
+    host_cpus=$(nproc 2>/dev/null || echo 4)
+    expected_cpus=$(( host_cpus < 4 ? host_cpus : 4 ))
+    guest_cpus=$(_e2e_ssh "$FAKE_PROJECT_A" "nproc" 2>/dev/null) || true
+    if [[ "$guest_cpus" == "$expected_cpus" ]]; then
+        pass "guest nproc is $expected_cpus (default VM_CPUS clamped to host)"
+    else
+        fail "guest nproc" "expected $expected_cpus, got '$guest_cpus'"
+    fi
+
+    # Test: `claude-vm ssh` shell exports CLAUDE_CODE_PROJECT_DIR_NAME. With
+    # stdin not a tty, ssh -t degrades to a plain command and the login shell
+    # reads the piped command.
+    local shell_env
+    shell_env=$(echo 'echo "name=$CLAUDE_CODE_PROJECT_DIR_NAME cfg=$CLAUDE_CONFIG_DIR"' | _e2e_cmd "$FAKE_PROJECT_A" ssh 2>/dev/null) || true
+    if echo "$shell_env" | grep -q "^name=project-a cfg=.*/.claude$"; then
+        pass "claude-vm ssh exports CLAUDE_CODE_PROJECT_DIR_NAME=project-a and CLAUDE_CONFIG_DIR"
+    else
+        fail "claude-vm ssh project dir name" "got: '$shell_env'"
+    fi
+}
+
+# ── Phase 2b: Config sync ───────────────────────────────────────────────────
+
+phase_config_sync() {
+    echo ""
+    echo "=== Phase 2b: Config sync (fake HOME) ==="
+    _require_phase "config sync" || return
+
+    # The other launches sync the real $HOME. A fake home makes the
+    # include-list assertable: user-scope customizations in, runtime state out.
+    local fake_home="$E2E_DIR/home"
+    mkdir -p "$fake_home/.claude/agents" "$fake_home/.claude/commands" \
+             "$fake_home/.claude/workflows" "$fake_home/.claude/skills/demo" \
+             "$fake_home/.claude/sessions" "$fake_home/.claude/cache" \
+             "$fake_home/.config/gh" "$fake_home/.config/glab-cli"
+    echo '{"e2e":"settings"}'          > "$fake_home/.claude/settings.json"
+    echo "agent body"                  > "$fake_home/.claude/agents/e2e-agent.md"
+    echo "command body"                > "$fake_home/.claude/commands/e2e-cmd.md"
+    echo "workflow body"               > "$fake_home/.claude/workflows/e2e-wf.md"
+    echo '{"e2e":"keys"}'              > "$fake_home/.claude/keybindings.json"
+    echo "skill body"                  > "$fake_home/.claude/skills/demo/SKILL.md"
+    echo "junk"                        > "$fake_home/.claude/sessions/junk"
+    echo "junk"                        > "$fake_home/.claude/cache/junk"
+    echo '{"hasCompletedOnboarding":true}' > "$fake_home/.claude.json"
+    echo "gh: e2e"                     > "$fake_home/.config/gh/hosts.yml"
+    echo "glab: e2e-sentinel"          > "$fake_home/.config/glab-cli/config.yml"
+
+    HOME="$fake_home" _e2e_launch "$FAKE_PROJECT_D"
+
+    if ! _e2e_ssh "$FAKE_PROJECT_D" "echo ok" 2>/dev/null | grep -q ok; then
+        fail "config-sync VM launch" "SSH not reachable for project D"
+        _e2e_cmd "$FAKE_PROJECT_D" stop &>/dev/null || true
+        return
+    fi
+
+    local missing=() f
+    for f in .claude/settings.json .claude/.claude.json .claude/agents/e2e-agent.md \
+             .claude/commands/e2e-cmd.md .claude/workflows/e2e-wf.md \
+             .claude/keybindings.json .claude/skills/demo/SKILL.md \
+             .config/gh/hosts.yml .config/glab-cli/config.yml; do
+        _e2e_ssh "$FAKE_PROJECT_D" "test -f ~/$f" &>/dev/null || missing+=("$f")
+    done
+    if (( ${#missing[@]} == 0 )); then
+        pass "agents, commands, workflows, keybindings, skills, gh and glab-cli synced into guest"
+    else
+        fail "config sync includes" "missing in guest: ${missing[*]}"
+    fi
+
+    local glab_guest
+    glab_guest=$(_e2e_ssh "$FAKE_PROJECT_D" "cat ~/.config/glab-cli/config.yml" 2>/dev/null) || true
+    if [[ "$glab_guest" == "glab: e2e-sentinel" ]]; then
+        pass "glab-cli config content matches host"
+    else
+        fail "glab-cli config content" "got '$glab_guest'"
+    fi
+
+    # Note: guests DO have a ~/.claude.json — the Claude Code installer bakes
+    # one (machineID, installMethod) into the base image. Claude ignores it
+    # when CLAUDE_CONFIG_DIR is set; the sync just must not write there.
+    local leaked=()
+    for f in .claude/sessions/junk .claude/cache/junk; do
+        _e2e_ssh "$FAKE_PROJECT_D" "test -e ~/$f" &>/dev/null && leaked+=("$f")
+    done
+    if (( ${#leaked[@]} == 0 )); then
+        pass "runtime state (sessions, cache) not synced into guest"
+    else
+        fail "config sync excludes" "leaked into guest: ${leaked[*]}"
+    fi
+    local guest_cfg
+    guest_cfg=$(_e2e_ssh "$FAKE_PROJECT_D" "cat ~/.claude/.claude.json" 2>/dev/null) || true
+    if echo "$guest_cfg" | grep -q "hasCompletedOnboarding"; then
+        pass "guest reads the synced config at ~/.claude/.claude.json"
+    else
+        fail "config-dir json content" "got: '$guest_cfg'"
+    fi
+
+    _e2e_cmd "$FAKE_PROJECT_D" stop &>/dev/null || true
+    _e2e_cmd "$FAKE_PROJECT_D" destroy &>/dev/null || true
 }
 
 # ── Phase 3: Multi-instance ─────────────────────────────────────────────────
@@ -466,6 +569,13 @@ phase_rebase() {
     # Write sentinel to ~/.claude/settings.json
     _e2e_ssh "$FAKE_PROJECT_A" "mkdir -p ~/.claude && echo '{\"sentinel\":\"rebase-test-12345\"}' > ~/.claude/settings.json" 2>/dev/null || true
 
+    # Runtime state that must NOT survive, transcript + glab auth that must
+    _e2e_ssh "$FAKE_PROJECT_A" "mkdir -p ~/.claude/jobs ~/.claude/daemon ~/.claude/projects/-workspace ~/.config/glab-cli \
+        && echo job > ~/.claude/jobs/e2e-sentinel \
+        && echo 99999 > ~/.claude/daemon/e2e-sentinel.lock \
+        && echo transcript > ~/.claude/projects/-workspace/e2e-sentinel.jsonl \
+        && echo glab > ~/.config/glab-cli/e2e-sentinel" 2>/dev/null || true
+
     # Stop the VM before rebase
     _e2e_cmd "$FAKE_PROJECT_A" stop &>/dev/null || true
 
@@ -512,6 +622,19 @@ phase_rebase() {
         fail "backup dir created" "not found: $backup_a"
     fi
 
+    # Test: backup carries transcripts + glab-cli but no runtime state
+    if [[ -f "$backup_a/.claude/projects/-workspace/e2e-sentinel.jsonl" ]] \
+       && [[ -f "$backup_a/.config/glab-cli/e2e-sentinel" ]]; then
+        pass "backup contains transcripts and glab-cli config"
+    else
+        fail "backup payload" "transcript or glab-cli sentinel missing from $backup_a"
+    fi
+    if [[ ! -e "$backup_a/.claude/jobs" ]] && [[ ! -e "$backup_a/.claude/daemon" ]]; then
+        pass "backup excludes ~/.claude runtime state (jobs, daemon)"
+    else
+        fail "backup excludes runtime state" "found: $(ls -d "$backup_a"/.claude/{jobs,daemon} 2>/dev/null | tr '\n' ' ')"
+    fi
+
     # Test: relaunch creates fresh snapshot from new base
     _e2e_launch "$FAKE_PROJECT_A"
 
@@ -528,6 +651,18 @@ phase_rebase() {
         pass "VM state restored from backup (sentinel found)"
     else
         fail "VM state restored" "sentinel not found in settings.json, got: '$restored_settings'"
+    fi
+
+    # Test: runtime-state sentinels did not come back; transcript + glab did
+    if _e2e_ssh "$FAKE_PROJECT_A" "test -f ~/.claude/projects/-workspace/e2e-sentinel.jsonl && test -f ~/.config/glab-cli/e2e-sentinel" 2>/dev/null; then
+        pass "transcript and glab-cli config restored after rebase"
+    else
+        fail "transcript/glab-cli restore" "sentinels missing in relaunched VM"
+    fi
+    if ! _e2e_ssh "$FAKE_PROJECT_A" "test -e ~/.claude/jobs/e2e-sentinel || test -e ~/.claude/daemon/e2e-sentinel.lock" 2>/dev/null; then
+        pass "daemon/jobs runtime state not carried into the fresh VM"
+    else
+        fail "runtime state dropped" "jobs/daemon sentinel present after rebase"
     fi
 
     # Test: backup dir is gone after successful restore
@@ -666,7 +801,7 @@ phase_full_flavor() {
     # Test: build tools present in the full image
     local missing_pkgs=()
     local pkg
-    for pkg in build-essential cmake tmux strace wget; do
+    for pkg in build-essential cmake tmux strace wget glab; do
         if ! _e2e_ssh "$FAKE_PROJECT_C" "dpkg -s $pkg" &>/dev/null; then
             missing_pkgs+=("$pkg")
         fi
@@ -677,11 +812,11 @@ phase_full_flavor() {
         fail "full packages" "missing: ${missing_pkgs[*]}"
     fi
 
-    # Test: gcc runs
-    if _e2e_ssh "$FAKE_PROJECT_C" "gcc --version && tmux -V" &>/dev/null; then
-        pass "gcc and tmux run in the full guest"
+    # Test: gcc, tmux and glab run
+    if _e2e_ssh "$FAKE_PROJECT_C" "gcc --version && tmux -V && glab --version" &>/dev/null; then
+        pass "gcc, tmux and glab run in the full guest"
     else
-        fail "gcc/tmux run" "execution failed"
+        fail "gcc/tmux/glab run" "execution failed"
     fi
 
     _e2e_cmd "$FAKE_PROJECT_C" stop &>/dev/null || true
@@ -701,6 +836,7 @@ main() {
 
     phase_build
     phase_launch
+    phase_config_sync
     phase_multi_instance
     phase_stop
     phase_resume

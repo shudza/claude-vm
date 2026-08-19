@@ -59,6 +59,12 @@ Open a plain shell (no Claude Code) in the running VM.
 claude-vm ssh
 ```
 
+The shell gets the same environment as the Claude Code launch, including `CLAUDE_CODE_PROJECT_DIR_NAME` (see below), so running `claude` by hand writes to the same transcript directory.
+
+### Transcript directory inside the VM
+
+Every project mounts at `/workspace`, so by default Claude Code would keep every VM's transcripts under `~/.claude/projects/-workspace`. `claude-vm` sets `CLAUDE_CODE_PROJECT_DIR_NAME` to the project's directory name (restricted to `A-Za-z0-9_-`, max 64 chars — Claude Code silently ignores anything else; `my-app` for `~/code/my-app`), so transcripts land in `~/.claude/projects/my-app` instead. `CLAUDE_CONFIG_DIR` is also set to its default `~/.claude`, because Claude Code only honors the name when a config dir is explicitly set; as a consequence the guest's global config json lives at `~/.claude/.claude.json` (the sync and rebase handle this). To override either, export the variable from `~/.env` inside the VM — it is sourced after the defaults are set.
+
 ### `claude-vm stop`
 
 Stop the VM gracefully. Preserves the project snapshot on disk.
@@ -103,7 +109,9 @@ claude-vm rebase --force              # Drop broken VM snapshots that can't be e
 4. Downloads and provisions a fresh base image
 5. On the next launch, each project gets a fresh snapshot from the new base, and the extracted state is restored
 
-**State preserved:** `~/.claude/` (settings, credentials, plugins, skills), `~/.claude.json`, `~/.gitconfig`, `~/.config/gh/`, plus any extra paths configured via `REBASE_BACKUP_PATHS` (see below). Everything else in each VM is lost.
+**State preserved:** `~/.claude/` (settings, credentials, plugins, skills, agents, commands, workflows, transcripts, plans, history), `~/.claude.json`, `~/.gitconfig`, `~/.config/gh/`, `~/.config/glab-cli/`, plus any extra paths configured via `REBASE_BACKUP_PATHS` (see below). Everything else in each VM is lost.
+
+**State dropped on purpose:** runtime state under `~/.claude/` — `daemon/`, `jobs/`, `sessions/`, `session-env/`, `shell-snapshots/`, `paste-cache/`, `tasks/`, `telemetry/`, `cache/`, `downloads/`, `backups/`, `file-history/` and a few cache files. Carrying a stale `daemon.lock` (its PID gets reused by the fresh VM) or an old worker roster breaks Claude Code's background agents, and the caches are worthless after a rebase. The pre-flight summary lists exactly what is kept.
 
 **Extra backup paths:** persist arbitrary guest paths through a rebase with a comma-separated list of absolute (`/etc/ssh`) or home-relative (`~/.ssh`) paths:
 
@@ -239,7 +247,7 @@ CLAUDE_ARGS="--dangerously-skip-permissions --model sonnet"
 | `FLAVOR` | `debian-slim` | `<distro>-slim`/`<distro>-full` for debian, ubuntu, archlinux, fedora (bare names alias to `-full`) | Base image flavor |
 | `VM_USER` | `$USER` | Username | Guest username (also used for SSH login) |
 | `VM_RAM` | `4G` | `\d+[GMgm]` | RAM allocation |
-| `VM_CPUS` | `2` | Positive integer | CPU cores |
+| `VM_CPUS` | `4` (clamped to the host's core count) | Positive integer | CPU cores. Claude Code's subagent/workflow fan-out scales with the guest's `nproc`, so the default errs high; an explicit value is never clamped |
 | `SSH_PORT_BASE` | `10022` | 1024-65535 | Starting SSH port |
 | `BASE_IMAGE_URL` | (from flavor) | URL | Cloud image download URL |
 | `BASE_IMAGE_NAME` | (from flavor) | Filename | Cloud image filename |
@@ -334,6 +342,8 @@ Everything comes from the distro's own repositories and installs in one cloud-in
 **Build:** build-essential/base-devel/gcc + g++ + make (per distro), cmake
 
 **Runtimes:** uv (Python package manager)
+
+**GitLab:** glab (GitLab CLI; `~/.config/glab-cli/` is synced from the host like `gh`'s config)
 
 **Debugging:** strace, lsof, socat, netcat, dig
 

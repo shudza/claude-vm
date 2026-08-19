@@ -10,7 +10,7 @@ CLAUDE_VM_CONFIG="${CLAUDE_VM_CONFIG:-$CLAUDE_VM_DIR/config}"
 
 # Defaults (overridable via config file)
 DEFAULT_RAM="4G"
-DEFAULT_CPUS="2"
+DEFAULT_CPUS="4"
 DEFAULT_SSH_PORT_BASE="10022"
 DEFAULT_FLAVOR="debian-slim"
 DEFAULT_VM_USER="$USER"
@@ -110,6 +110,19 @@ CLOUD_INIT_DIR="$CLAUDE_VM_DIR/cloud-init"
 RUN_DIR="$CLAUDE_VM_DIR/run"
 BACKUPS_DIR="$CLAUDE_VM_DIR/backups"
 
+# Builtin CPU default: DEFAULT_CPUS, clamped to the host's core count so a
+# small host is never overcommitted by the default. Claude Code's subagent /
+# workflow fan-out scales with the guest's nproc, so the default errs high.
+_default_cpus() {
+    local host_cpus
+    host_cpus="$(nproc 2>/dev/null || echo "$DEFAULT_CPUS")"
+    if [[ "$host_cpus" =~ ^[0-9]+$ ]] && (( host_cpus >= 1 && host_cpus < DEFAULT_CPUS )); then
+        echo "$host_cpus"
+    else
+        echo "$DEFAULT_CPUS"
+    fi
+}
+
 # Load user config (simple key=value file)
 # Priority: defaults → config file → environment variables
 load_config() {
@@ -125,9 +138,10 @@ load_config() {
     local _env_claude_args="${CLAUDE_ARGS:-}"
     local _env_rebase_backup_paths="${REBASE_BACKUP_PATHS:-}"
 
-    # Start with defaults
+    # Start with defaults (VM_CPUS resolved last so only the builtin default
+    # gets clamped to the host's core count, never an explicit value)
     VM_RAM="$DEFAULT_RAM"
-    VM_CPUS="$DEFAULT_CPUS"
+    VM_CPUS=""
     SSH_PORT_BASE="$DEFAULT_SSH_PORT_BASE"
     FLAVOR="$DEFAULT_FLAVOR"
     VM_USER="$DEFAULT_VM_USER"
@@ -150,6 +164,7 @@ load_config() {
     [[ -n "$_env_forward_ports" ]] && FORWARD_PORTS="$_env_forward_ports"
     [[ -n "$_env_claude_args" ]] && CLAUDE_ARGS="$_env_claude_args"
     [[ -n "$_env_rebase_backup_paths" ]] && REBASE_BACKUP_PATHS="$_env_rebase_backup_paths"
+    [[ -n "$VM_CPUS" ]] || VM_CPUS="$(_default_cpus)"
 
     # Normalize flavor and derive image URL/name from its distro
     # (explicit overrides still win)

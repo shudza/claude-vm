@@ -7,6 +7,11 @@
 # 3. _pid_alive tracks process liveness (including unreaped children)
 # 4. _check_virtiofsd_idmap requires newuidmap/newgidmap when unprivileged
 # 5. start_virtiofsd fails when virtiofsd dies after binding its socket
+# 8. _guest_project_dir_name derives a sanitized name from the project basename
+# 9. connect_vm / connect_vm_shell export CLAUDE_CODE_PROJECT_DIR_NAME
+# 10. sync_claude_config_to_vm includes agents/commands/workflows/keybindings
+# 11. sync_claude_config_to_vm syncs ~/.config/glab-cli/
+# 12. host ~/.claude.json syncs to ~/.claude/.claude.json (CLAUDE_CONFIG_DIR location)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -219,6 +224,164 @@ FAKE
     rm -rf "$FAKE_BIN" "$VFS_PROJECT"
     teardown_test_env
 fi
+
+# ── Test: guest project dir name derivation ──────────────────────────────────
+echo "--- Test 8: _guest_project_dir_name sanitizes the basename ---"
+setup_test_env
+
+NAME_ROOT="$(mktemp -d)"
+mkdir -p "$NAME_ROOT/my-proj" "$NAME_ROOT/we ird (x)" "$NAME_ROOT/my.app" "$NAME_ROOT/@@@" "$NAME_ROOT/AUX"
+
+if [[ "$(_guest_project_dir_name "$NAME_ROOT/my-proj")" == "my-proj" ]]; then
+    pass "plain basename is kept"
+else
+    fail "plain basename should be kept: $(_guest_project_dir_name "$NAME_ROOT/my-proj")"
+fi
+if [[ "$(_guest_project_dir_name "$NAME_ROOT/we ird (x)")" == "weirdx" ]]; then
+    pass "unsafe characters are stripped"
+else
+    fail "unsafe characters should be stripped: $(_guest_project_dir_name "$NAME_ROOT/we ird (x)")"
+fi
+# Claude Code validates against ^[A-Za-z0-9_-]{1,64}$ — dots are rejected
+if [[ "$(_guest_project_dir_name "$NAME_ROOT/my.app")" == "myapp" ]]; then
+    pass "dots are stripped (upstream charset has no dot)"
+else
+    fail "dots should be stripped: $(_guest_project_dir_name "$NAME_ROOT/my.app")"
+fi
+if [[ "$(_guest_project_dir_name "$NAME_ROOT/@@@")" == "workspace" ]]; then
+    pass "empty result falls back to 'workspace'"
+else
+    fail "empty result should fall back to workspace: $(_guest_project_dir_name "$NAME_ROOT/@@@")"
+fi
+if [[ "$(_guest_project_dir_name "$NAME_ROOT/AUX")" == "workspace" ]]; then
+    pass "Windows reserved device names fall back to 'workspace'"
+else
+    fail "reserved names should fall back: $(_guest_project_dir_name "$NAME_ROOT/AUX")"
+fi
+long_dir="$NAME_ROOT/$(printf 'a%.0s' {1..80})"
+mkdir -p "$long_dir"
+long_name="$(_guest_project_dir_name "$long_dir")"
+if (( ${#long_name} == 64 )); then
+    pass "names are truncated to 64 chars (upstream max)"
+else
+    fail "name should be 64 chars, got ${#long_name}"
+fi
+
+rm -rf "$NAME_ROOT"
+teardown_test_env
+
+# ── Test: connect_vm / connect_vm_shell export the project dir name ──────────
+echo "--- Test 9: connect helpers export CLAUDE_CODE_PROJECT_DIR_NAME ---"
+setup_test_env
+
+FAKE_BIN="$(mktemp -d)"
+cat > "$FAKE_BIN/ssh" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$@"
+FAKE
+chmod +x "$FAKE_BIN/ssh"
+CONN_PROJECT="$(mktemp -d)/sample-app"
+mkdir -p "$CONN_PROJECT"
+
+output="$(PATH="$FAKE_BIN:$PATH" connect_vm 12345 "$CONN_PROJECT" --resume 2>&1)"
+if [[ "$output" == *'export CLAUDE_CODE_PROJECT_DIR_NAME="sample-app";'* ]]; then
+    pass "connect_vm exports CLAUDE_CODE_PROJECT_DIR_NAME=sample-app"
+else
+    fail "connect_vm should export the project dir name: $output"
+fi
+# Claude Code only honors the name when CLAUDE_CONFIG_DIR is set
+if [[ "$output" == *'export CLAUDE_CONFIG_DIR="$HOME/.claude"; export CLAUDE_CODE_PROJECT_DIR_NAME'* ]]; then
+    pass "connect_vm exports CLAUDE_CONFIG_DIR (required for the name to be honored)"
+else
+    fail "connect_vm should export CLAUDE_CONFIG_DIR: $output"
+fi
+if [[ "$output" == *'exec claude --dangerously-skip-permissions --resume'* ]]; then
+    pass "connect_vm still launches claude with CLAUDE_ARGS + extras"
+else
+    fail "connect_vm should launch claude with args: $output"
+fi
+if [[ "$output" == *'CLAUDE_CODE_PROJECT_DIR_NAME="sample-app"; cd /workspace 2>/dev/null; [ -f ~/.env ] && . ~/.env;'* ]]; then
+    pass "export precedes ~/.env so the user can override it"
+else
+    fail "export should come before ~/.env: $output"
+fi
+
+output="$(PATH="$FAKE_BIN:$PATH" connect_vm_shell 12345 "$CONN_PROJECT" 2>&1)"
+if [[ "$output" == *'export CLAUDE_CODE_PROJECT_DIR_NAME="sample-app";'* ]] && [[ "$output" == *'-l'* ]]; then
+    pass "connect_vm_shell exports the name and execs a login shell"
+else
+    fail "connect_vm_shell should export the name and exec a login shell: $output"
+fi
+
+rm -rf "$FAKE_BIN" "$(dirname "$CONN_PROJECT")"
+teardown_test_env
+
+# ── Test: sync include-list carries user-scope customizations ────────────────
+echo "--- Test 10: sync_claude_config_to_vm include-list ---"
+setup_test_env
+
+FAKE_BIN="$(mktemp -d)"
+FAKE_HOME="$(mktemp -d)"
+SYNC_LOG="$FAKE_BIN/calls.log"
+cat > "$FAKE_BIN/rsync" <<FAKE
+#!/usr/bin/env bash
+echo "rsync \$*" >> "$SYNC_LOG"
+FAKE
+cat > "$FAKE_BIN/ssh" <<FAKE
+#!/usr/bin/env bash
+echo "ssh \$*" >> "$SYNC_LOG"
+FAKE
+chmod +x "$FAKE_BIN/rsync" "$FAKE_BIN/ssh"
+mkdir -p "$FAKE_HOME/.claude" "$FAKE_HOME/.config/glab-cli" "$FAKE_HOME/.config/gh"
+echo '{"theme":"dark"}' > "$FAKE_HOME/.claude.json"
+
+HOME="$FAKE_HOME" PATH="$FAKE_BIN:$PATH" sync_claude_config_to_vm 12345 >/dev/null 2>&1
+
+claude_sync_line="$(grep -- "--include=settings.json" "$SYNC_LOG" | head -1)"
+missing_includes=()
+for inc in "agents/***" "commands/***" "workflows/***" "keybindings.json" "plugins/***" "skills/***"; do
+    [[ "$claude_sync_line" == *"--include=$inc "* ]] || missing_includes+=("$inc")
+done
+if (( ${#missing_includes[@]} == 0 )); then
+    pass "~/.claude sync includes agents, commands, workflows, keybindings"
+else
+    fail "~/.claude sync missing includes: ${missing_includes[*]} — $claude_sync_line"
+fi
+if [[ "$claude_sync_line" == *"--exclude=* "* ]]; then
+    pass "~/.claude sync still ends with a catch-all exclude"
+else
+    fail "~/.claude sync should keep --exclude='*': $claude_sync_line"
+fi
+
+# ── Test: glab-cli config is synced like gh ──────────────────────────────────
+echo "--- Test 11: sync_claude_config_to_vm syncs ~/.config/glab-cli/ ---"
+if grep -q "ssh .*mkdir -p ~/.config/glab-cli" "$SYNC_LOG" && \
+   grep -q "rsync .*$FAKE_HOME/.config/glab-cli/ .*@localhost:~/.config/glab-cli/" "$SYNC_LOG"; then
+    pass "glab-cli config dir is rsynced into the guest"
+else
+    fail "glab-cli config should be rsynced: $(cat "$SYNC_LOG")"
+fi
+if grep -q "rsync .*$FAKE_HOME/.config/gh/ .*@localhost:~/.config/gh/" "$SYNC_LOG"; then
+    pass "gh config sync unchanged"
+else
+    fail "gh config sync should still run: $(cat "$SYNC_LOG")"
+fi
+
+# ── Test: ~/.claude.json lands at the CLAUDE_CONFIG_DIR location ─────────────
+echo "--- Test 12: host ~/.claude.json syncs to guest ~/.claude/.claude.json ---"
+if grep -q "rsync .*$FAKE_HOME/.claude.json .*@localhost:~/.claude/.claude.json" "$SYNC_LOG"; then
+    pass "config json targets ~/.claude/.claude.json (read via CLAUDE_CONFIG_DIR)"
+else
+    fail "config json should target ~/.claude/.claude.json: $(grep claude.json "$SYNC_LOG")"
+fi
+if grep -q "@localhost:~/.claude.json" "$SYNC_LOG"; then
+    fail "config json must not target the legacy ~/.claude.json path: $(grep claude.json "$SYNC_LOG")"
+else
+    pass "legacy ~/.claude.json guest path no longer written"
+fi
+
+rm -rf "$FAKE_BIN" "$FAKE_HOME"
+teardown_test_env
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 echo ""

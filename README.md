@@ -12,7 +12,7 @@ Claude Code works best with `--dangerously-skip-permissions`, but running an AI 
 - **Fast**: virtiofs gives near-native filesystem performance. No copying files in or out.
 - **Lightweight**: Linked QCOW2 snapshots share a base image. Each project adds only its delta (~200KB initially).
 - **Multi-instance**: Run multiple Claude Code sessions in the same project VM simultaneously.
-- **Batteries included**: Git identity, GitHub CLI auth, and Claude Code config are synced automatically.
+- **Batteries included**: Git identity, GitHub/GitLab CLI auth, and Claude Code config (settings, plugins, skills, agents, commands, workflows, keybindings) are synced automatically.
 
 ## Requirements
 
@@ -147,7 +147,7 @@ Each flavor gets its own base image (`~/.claude-vm/base/base-<flavor>.qcow2`), s
 1. **Base image** is built once: downloaded cloud image is verified against the upstream checksum file (SHA256/SHA512), then cloud-init provisions Claude Code, dev tools, and SSH
 2. **Linked snapshots** (QCOW2 copy-on-write) give each project its own VM state backed by the shared base
 3. **virtiofs** mounts your project directory into the VM at `/workspace` with near-native I/O
-4. **Config sync** (rsync) copies your Claude Code settings, git identity, and gh auth into the VM on first VM creation
+4. **Config sync** (rsync) copies your Claude Code settings, git identity, and gh/glab auth into the VM on first VM creation
 5. **SSH** connects your terminal to Claude Code running inside the VM
 
 A base image is roughly 1–1.5GB depending on variant (each flavor keeps its own `base-<flavor>.qcow2`). Each project snapshot starts at ~200KB and grows only as the VM writes to its own disk (package installs, caches, etc.). QEMU is configured with `discard=unmap` so that deleted files are reclaimed from the overlay via fstrim, keeping snapshots compact over time. Background services that would silently grow snapshots (unattended-upgrades, apt timers, man-db rebuilds) are disabled during provisioning.
@@ -160,7 +160,7 @@ All packages come from the distro's own repositories and install in a single clo
 
 **Slim** (every flavor): git, ripgrep, jq, less, gh (GitHub CLI), curl, zip/unzip, rsync, Node.js + npm, Python 3 (with pip and venv), Claude Code.
 
-**Full** adds: build tools (build-essential/base-devel/gcc + cmake), uv (Python package manager), tmux, vim, tree, xxd, file, sqlite3, bc, ping, lsof, socat, netcat, dig, strace, patch, wget, gnupg.
+**Full** adds: build tools (build-essential/base-devel/gcc + cmake), uv (Python package manager), glab (GitLab CLI), tmux, vim, tree, xxd, file, sqlite3, bc, ping, lsof, socat, netcat, dig, strace, patch, wget, gnupg.
 
 Node.js comes from the distro repos: 20.x on Debian 13, 18.x on Ubuntu 24.04, current releases on Arch and Fedora. Need something newer? Claude Code has full sudo access — install it at runtime via NodeSource or nvm, like any other missing tool.
 
@@ -201,7 +201,7 @@ claude-vm destroy --all   # Removes base image + all snapshots
 claude-vm rebase   # Extracts state, rebuilds base, restores on next launch
 ```
 
-Rebase preserves `~/.claude/`, `~/.claude.json`, `~/.gitconfig`, `~/.config/gh/` by default. Add arbitrary guest paths (synced as root with permissions preserved) via `REBASE_BACKUP_PATHS` — see [docs/usage.md](docs/usage.md#claude-vm-rebase).
+Rebase preserves `~/.claude/` (minus runtime state such as `daemon/`, `jobs/`, `sessions/` and caches), `~/.claude.json`, `~/.gitconfig`, `~/.config/gh/`, `~/.config/glab-cli/` by default. Add arbitrary guest paths (synced as root with permissions preserved) via `REBASE_BACKUP_PATHS` — see [docs/usage.md](docs/usage.md#claude-vm-rebase).
 
 ## Contributing
 

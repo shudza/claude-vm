@@ -592,6 +592,33 @@ test_restore_consumes_backup() {
         fail "backup consumed" "directory still present at $bd"
     fi
 
+    # C: legacy ~/.claude.json (pre-CLAUDE_CONFIG_DIR VM) is migrated to
+    # ~/.claude/.claude.json; a config-dir copy in the backup wins instead
+    local pushed
+    fake_rsync_log() { pushed+="${*: -1} <- ${*: -2:1}"$'\n'; }
+    _build_rsync_cmd() { _rsync_cmd=(fake_rsync_log); }
+
+    pushed=""
+    mkdir -p "$bd/.claude"
+    echo '{"legacy":1}' > "$bd/.claude.json"
+    _restore_one_vm "$project" 10022 >/dev/null 2>&1
+    if echo "$pushed" | grep -q '~/.claude/.claude.json <- .*/.claude.json'; then
+        pass "legacy .claude.json migrated to ~/.claude/.claude.json"
+    else
+        fail "legacy .claude.json migration" "pushed: $pushed"
+    fi
+
+    pushed=""
+    mkdir -p "$bd/.claude"
+    echo '{"legacy":1}' > "$bd/.claude.json"
+    echo '{"configdir":1}' > "$bd/.claude/.claude.json"
+    _restore_one_vm "$project" 10022 >/dev/null 2>&1
+    if echo "$pushed" | grep -q '~/.claude/.claude.json <- .*/\.claude\.json$'; then
+        fail "config-dir copy priority" "legacy file overwrote config-dir copy: $pushed"
+    else
+        pass "config-dir .claude.json from the backup is not clobbered by the legacy file"
+    fi
+
     teardown_test_env
 }
 
@@ -674,10 +701,16 @@ test_rebase_preserved_desc() {
     desc="$(_rebase_preserved_desc)"
 
     if [[ "$desc" == *"~/.claude/"* && "$desc" == *"~/.gitconfig"* \
+          && "$desc" == *"~/.config/glab-cli/"* \
           && "$desc" == *"/etc/ssh"* && "$desc" == *"~/.ssh"* ]]; then
-        pass "description includes builtins and user paths"
+        pass "description includes builtins (incl. glab-cli) and user paths"
     else
         fail "_rebase_preserved_desc" "got '$desc'"
+    fi
+    if [[ "$desc" == *"excluding"*"daemon"* ]]; then
+        pass "description states that runtime state is excluded"
+    else
+        fail "_rebase_preserved_desc exclusion note" "got '$desc'"
     fi
 
     teardown_test_env
@@ -796,6 +829,111 @@ test_extract_user_paths_manifest() {
     teardown_test_env
 }
 
+# ── 22: builtin extraction excludes ~/.claude runtime state ─────────────────
+
+test_extract_excludes_claude_runtime_state() {
+    echo "--- Test 22: extraction skips daemon/jobs/caches, keeps transcripts ---"
+    setup_test_env
+
+    local project="/tmp/proj-extract-excl-$$"
+    register_project "$project"
+    local bd guest
+    bd="$(project_backup_dir "$project")"
+    guest="$(mktemp -d)"
+
+    # Fake guest home with config, transcripts and runtime state
+    mkdir -p "$guest/.claude/projects/-workspace" "$guest/.claude/plans" \
+             "$guest/.claude/agents" "$guest/.claude/daemon" "$guest/.claude/jobs" \
+             "$guest/.claude/sessions" "$guest/.claude/cache" "$guest/.claude/shell-snapshots" \
+             "$guest/.config/gh" "$guest/.config/glab-cli"
+    echo '{"x":1}'     > "$guest/.claude/settings.json"
+    echo "transcript"  > "$guest/.claude/projects/-workspace/abc.jsonl"
+    echo "plan"        > "$guest/.claude/plans/p.md"
+    echo "agent"       > "$guest/.claude/agents/a.md"
+    echo "history"     > "$guest/.claude/history.jsonl"
+    echo "12345"       > "$guest/.claude/daemon/daemon.lock"
+    echo "job"         > "$guest/.claude/jobs/j.json"
+    echo "sess"        > "$guest/.claude/sessions/s.json"
+    echo "cache"       > "$guest/.claude/cache/c"
+    echo "snap"        > "$guest/.claude/shell-snapshots/snap.sh"
+    echo "cleanup"     > "$guest/.claude/.last-cleanup"
+    echo "gh"          > "$guest/.config/gh/hosts.yml"
+    echo "glab"        > "$guest/.config/glab-cli/config.yml"
+    echo "[user]"      > "$guest/.gitconfig"
+
+    qemu-system-x86_64() { return 0; }
+    wait_for_ssh()       { return 0; }
+    _detect_accel()      { echo "tcg"; }
+    find_available_port() { echo 29022; }
+    _fast_shutdown()     { return 0; }
+    _cleanup_runtime()   { return 0; }
+
+    # ssh probes resolve against the fake guest home
+    fake_ssh() {
+        local cmd="${*: -1}"
+        case "$cmd" in
+            "test -e ~/"*) [[ -e "$guest/${cmd#test -e ~/}" ]] ;;
+            *) return 1 ;;
+        esac
+    }
+    # rsync: rewrite user@localhost:~/path to the fake guest and run the real
+    # rsync locally so --exclude semantics are exercised for real
+    fake_rsync() {
+        local -a args=()
+        local a
+        for a in "$@"; do
+            case "$a" in
+                *@localhost:~/*) args+=("$guest/${a#*@localhost:~/}") ;;
+                -e) args+=(--rsh=true) ;;
+                "ssh "*) ;;
+                *) args+=("$a") ;;
+            esac
+        done
+        command rsync "${args[@]}"
+    }
+    _build_ssh_cmd()        { _ssh_cmd=(fake_ssh); }
+    _build_rsync_cmd()      { _rsync_cmd=(fake_rsync -az --no-perms --no-owner --no-group -e "ssh -p 1"); }
+    _build_rsync_sudo_cmd() { _rsync_sudo_cmd=(true); }
+
+    REBASE_BACKUP_PATHS=""
+    _extract_one_vm "$project" >/dev/null 2>&1
+
+    local ok=true f
+    for f in .claude/settings.json .claude/projects/-workspace/abc.jsonl .claude/plans/p.md \
+             .claude/agents/a.md .claude/history.jsonl .config/gh/hosts.yml \
+             .config/glab-cli/config.yml .gitconfig; do
+        [[ -f "$bd/$f" ]] || { fail "kept path" "missing $bd/$f"; ok=false; }
+    done
+    $ok && pass "config, transcripts, plans, history, gh and glab-cli are extracted"
+
+    ok=true
+    for f in .claude/daemon .claude/jobs .claude/sessions .claude/cache \
+             .claude/shell-snapshots .claude/.last-cleanup; do
+        [[ -e "$bd/$f" ]] && { fail "excluded path" "$bd/$f present in backup"; ok=false; }
+    done
+    $ok && pass "daemon, jobs, sessions, caches and shell snapshots are not extracted"
+
+    # Excludes apply only to .claude/ — a same-named dir elsewhere is untouched
+    local ex
+    ex="$(_rebase_excludes_for ".config/gh/")"
+    if [[ -z "$ex" ]]; then
+        pass "_rebase_excludes_for emits nothing for non-.claude paths"
+    else
+        fail "_rebase_excludes_for" "got '$ex' for .config/gh/"
+    fi
+    ex="$(_rebase_excludes_for ".claude/")"
+    if [[ "$ex" == *"--exclude=/daemon/"* && "$ex" == *"--exclude=/projects/"* ]]; then
+        fail "_rebase_excludes_for" "projects/ must never be excluded"
+    elif [[ "$ex" == *"--exclude=/daemon/"* ]]; then
+        pass "_rebase_excludes_for emits anchored excludes for .claude/"
+    else
+        fail "_rebase_excludes_for" "got '$ex' for .claude/"
+    fi
+
+    rm -rf "$guest"
+    teardown_test_env
+}
+
 # ── Run all tests ───────────────────────────────────────────────────────────
 
 echo "=== claude-vm rebase tests ==="
@@ -824,6 +962,7 @@ test_build_rsync_sudo_cmd
 test_rebase_preserved_desc
 test_restore_manifest_paths
 test_extract_user_paths_manifest
+test_extract_excludes_claude_runtime_state
 
 echo ""
 echo "=== Results: $TESTS_PASSED passed, $TESTS_FAILED failed, $TESTS_SKIPPED skipped, $TESTS_RUN total ==="
