@@ -296,7 +296,7 @@ phase_launch() {
 
     # Test: core packages installed (these come from the packages: block in cloud-init)
     local missing_pkgs=()
-    for pkg in git rsync jq ripgrep curl cmake strace socat tmux tree; do
+    for pkg in git rsync jq ripgrep curl socat tmux tree; do
         if ! _e2e_ssh "$FAKE_PROJECT_A" "dpkg -s $pkg" &>/dev/null; then
             missing_pkgs+=("$pkg")
         fi

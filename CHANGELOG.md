@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- Compilers and heavyweight tooling from the base image (all flavors): `build-essential`/`base-devel`/`gcc`+`gcc-c++`+`make`, `cmake`, `dnsutils`/`bind-tools`/`bind-utils`, `strace`, and `wget`. Together they accounted for roughly half of the provisioning time (~100MB of downloads, ~350MB installed) and pushed the base build well past the 120s target; the VM keeps NOPASSWD sudo, so Claude installs them on demand when a project actually compiles native extensions. Python's pip/venv stay.
 - The save-VM-state step of `claude-vm stop`. It could never succeed — QEMU was launched without the QMP socket it required — and only produced a spurious `✗ Saving VM state` error on every stop. There was also no `-loadvm` counterpart, so no state was ever resumed.
 
 ## [0.1.2] - 2026-07-25

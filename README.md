@@ -152,13 +152,11 @@ See [docs/architecture.md](docs/architecture.md) for the full design.
 
 The base image includes everything Claude Code commonly reaches for:
 
-**Core:** git, ripgrep, gh (GitHub CLI), curl, wget, jq
-
-**Build:** gcc, g++, make, cmake
+**Core:** git, ripgrep, gh (GitHub CLI), curl, jq
 
 **Runtimes:** Node.js 22, Python 3 (with pip and venv), uv (Python package manager)
 
-**Debug:** strace, lsof, socat, netcat, dig
+**Debug:** lsof, socat, netcat
 
 **Utilities:** tmux, vim, xxd, sqlite3, bc, ping, tree, rsync, file, patch, unzip
 

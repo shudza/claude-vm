@@ -174,12 +174,8 @@ packages:
   - openssh-server
   - git
   - curl
-  - wget
   - jq
   - ripgrep
-  # Build tools (native npm modules, compilation)
-  - build-essential
-  - cmake
   # Runtimes
   - python3
   - python3-pip
@@ -189,9 +185,7 @@ packages:
   - file
   - sqlite3
   - bc
-  - strace
   - lsof
-  - dnsutils
   - netcat-openbsd
   - iputils-ping
   - socat
@@ -213,12 +207,8 @@ packages:
   - openssh-server
   - git
   - curl
-  - wget
   - jq
   - ripgrep
-  # Build tools (native npm modules, compilation)
-  - build-essential
-  - cmake
   # Runtimes
   - python3
   - python3-pip
@@ -228,9 +218,7 @@ packages:
   - file
   - sqlite3
   - bc
-  - strace
   - lsof
-  - dnsutils
   - netcat-openbsd
   - iputils-ping
   - socat
@@ -252,12 +240,8 @@ packages:
   - openssh
   - git
   - curl
-  - wget
   - jq
   - ripgrep
-  # Build tools (native npm modules, compilation)
-  - base-devel
-  - cmake
   # Runtimes
   - python
   - python-pip
@@ -266,9 +250,7 @@ packages:
   - file
   - sqlite
   - bc
-  - strace
   - lsof
-  - bind-tools
   - openbsd-netcat
   - iputils
   - socat
@@ -289,14 +271,8 @@ packages:
   - openssh-server
   - git
   - curl
-  - wget
   - jq
   - ripgrep
-  # Build tools (native npm modules, compilation)
-  - gcc
-  - gcc-c++
-  - make
-  - cmake
   # Runtimes
   - python3
   - python3-pip
@@ -305,9 +281,7 @@ packages:
   - file
   - sqlite
   - bc
-  - strace
   - lsof
-  - bind-utils
   - nmap-ncat
   - iputils
   - socat

@@ -278,7 +278,7 @@ defaults < config file < environment variables
 | `archlinux` | Arch Linux cloud image | pacman | Rolling release |
 | `fedora` | Fedora 41 Cloud Base | dnf | |
 
-All flavors install the same core tool set; package names differ per distro (e.g. `build-essential` vs `base-devel`, `vim-tiny` vs `vim`).
+All flavors install the same core tool set; package names differ per distro (e.g. `netcat-openbsd` vs `openbsd-netcat`, `vim-tiny` vs `vim`).
 
 Set the flavor:
 
@@ -314,17 +314,18 @@ Each invocation detects the running VM and attaches a new Claude Code session vi
 
 The base image includes tools Claude Code commonly uses:
 
-**Core:** git, curl, wget, jq, ripgrep (rg), gh (GitHub CLI)
-
-**Build:** gcc, g++, make, cmake
+**Core:** git, curl, jq, ripgrep (rg), gh (GitHub CLI)
 
 **Runtimes:** Node.js 22, Python 3, pip, venv, uv (Python package manager)
 
-**Debugging:** strace, lsof, socat, netcat, dnsutils (dig)
+**Debugging:** lsof, socat, netcat
 
 **Utilities:** tmux, vim/vim-tiny, tree, xxd, file, sqlite3, bc, ping, rsync, unzip, patch
 
 Claude Code also has full `sudo` access (NOPASSWD) to install additional packages at runtime.
+Compilers and build tools (gcc, make, cmake, …) are intentionally not pre-installed —
+they add ~100MB of downloads to the base image build and are only needed when a project
+compiles native extensions; Claude installs them on demand.
 
 ## Logs
 
