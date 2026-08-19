@@ -287,10 +287,12 @@ phase_launch() {
         fail "virtiofs write" "file not visible on host"
     fi
 
-    # Test: slim packages installed (these come from the packages: block in cloud-init)
+    # Test: slim packages installed (these come from the packages: block in
+    # cloud-init). --whatprovides because some are virtual provides — Fedora
+    # ships node as a versioned rpm (nodejs22) that Provides: nodejs.
     local missing_pkgs=()
     for pkg in git rsync jq ripgrep curl less zip unzip gh nodejs openssh-server; do
-        if ! _e2e_ssh "$FAKE_PROJECT_A" "rpm -q $pkg" &>/dev/null; then
+        if ! _e2e_ssh "$FAKE_PROJECT_A" "rpm -q --whatprovides $pkg" &>/dev/null; then
             missing_pkgs+=("$pkg")
         fi
     done
@@ -315,10 +317,16 @@ phase_launch() {
     fi
 
     # Test: node and gh actually run
-    if _e2e_ssh "$FAKE_PROJECT_A" "node --version && npm --version && gh --version" &>/dev/null; then
+    local ver_failures="" ver_cmd ver_out
+    for ver_cmd in "node --version" "npm --version" "gh --version"; do
+        if ! ver_out=$(_e2e_ssh "$FAKE_PROJECT_A" "$ver_cmd" 2>&1); then
+            ver_failures+="'$ver_cmd' → ${ver_out:0:120}; "
+        fi
+    done
+    if [[ -z "$ver_failures" ]]; then
         pass "node, npm, and gh run in the guest"
     else
-        fail "node/npm/gh run" "one of them failed to execute"
+        fail "node/npm/gh run" "$ver_failures"
     fi
 
     # Test: dnf available (Fedora package manager)

@@ -68,7 +68,7 @@ with the log path and a tail of recent errors.
 
 ## Build/Provisioning Flow
 
-1. Download cloud image (Debian 13, Ubuntu 24.04, Arch, or Fedora 41 depending on flavor)
+1. Download cloud image (Debian 13, Ubuntu 24.04, Arch, or Fedora 44 depending on flavor)
 2. Convert to QCOW2 and resize to 20GB
 3. Generate cloud-init ISO with user-data, meta-data, and network-config
 4. Boot VM with cloud-init attached (headless, auto-poweroff when done)

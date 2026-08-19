@@ -282,7 +282,7 @@ Flavors are named `<distro>-<variant>`. The **slim** variant carries the everyda
 | `debian-full` | Debian 13 (trixie) genericcloud | apt | Adds build-essential, cmake, tmux, ... |
 | `ubuntu-slim` / `ubuntu-full` | Ubuntu 24.04 minimal | apt | snapd auto-removed during provisioning |
 | `archlinux-slim` / `archlinux-full` | Arch Linux cloud image | pacman | Rolling release |
-| `fedora-slim` / `fedora-full` | Fedora 41 Cloud Base | dnf | |
+| `fedora-slim` / `fedora-full` | Fedora 44 Cloud Base | dnf | |
 
 All flavors of a variant install the same tool set; package names differ per distro (e.g. `build-essential` vs `base-devel`, `gh` vs `github-cli`). Each flavor keeps its own base image (`base-<flavor>.qcow2`), so multiple flavors coexist and different projects can use different flavors.
 

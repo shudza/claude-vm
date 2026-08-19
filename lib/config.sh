@@ -29,14 +29,14 @@ declare -gA FLAVOR_IMAGE_URL=(
     [debian]="https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2"
     [ubuntu]="https://cloud-images.ubuntu.com/minimal/releases/noble/release/ubuntu-24.04-minimal-cloudimg-amd64.img"
     [archlinux]="https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2"
-    [fedora]="https://download.fedoraproject.org/pub/fedora/linux/releases/41/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-41-1.4.x86_64.qcow2"
+    [fedora]="https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2"
 )
 
 declare -gA FLAVOR_IMAGE_NAME=(
     [debian]="debian-13-genericcloud-amd64.qcow2"
     [ubuntu]="ubuntu-24.04-minimal-cloudimg-amd64.img"
     [archlinux]="Arch-Linux-x86_64-cloudimg.qcow2"
-    [fedora]="Fedora-Cloud-Base-Generic-41-1.4.x86_64.qcow2"
+    [fedora]="Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2"
 )
 
 # Upstream checksum file URLs (fetched at download time to verify image integrity)
@@ -45,7 +45,7 @@ declare -gA FLAVOR_CHECKSUM_URL=(
     [debian]="https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS"
     [ubuntu]="https://cloud-images.ubuntu.com/minimal/releases/noble/release/SHA256SUMS"
     [archlinux]="https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2.SHA256"
-    [fedora]="https://download.fedoraproject.org/pub/fedora/linux/releases/41/Cloud/x86_64/images/Fedora-Cloud-41-1.4-x86_64-CHECKSUM"
+    [fedora]="https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-44-1.7-x86_64-CHECKSUM"
 )
 
 declare -gA FLAVOR_CHECKSUM_TYPE=(

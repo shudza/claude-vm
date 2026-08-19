@@ -131,7 +131,7 @@ Every distro comes in two variants: **slim** (fast to build — git, Node.js, Py
 | `debian-full` | Debian 13 (trixie) genericcloud | Adds build-essential, cmake, tmux, ... |
 | `ubuntu-slim` / `ubuntu-full` | Ubuntu 24.04 minimal | snapd auto-removed |
 | `archlinux-slim` / `archlinux-full` | Arch Linux cloud image | Rolling release, uses pacman |
-| `fedora-slim` / `fedora-full` | Fedora 41 Cloud Base | Uses dnf |
+| `fedora-slim` / `fedora-full` | Fedora 44 Cloud Base | Uses dnf |
 
 ```bash
 claude-vm build --flavor debian-full

@@ -58,7 +58,7 @@ Flavors:
   debian-full                   Debian 13 with build tools and extra utilities
   ubuntu-slim / ubuntu-full     Ubuntu 24.04 minimal cloud image
   archlinux-slim / archlinux-full   Arch Linux cloud image (rolling release)
-  fedora-slim / fedora-full     Fedora 41 Cloud Base
+  fedora-slim / fedora-full     Fedora 44 Cloud Base
 
 Configuration:
   ~/.claude-vm/config           Config file (FLAVOR, VM_RAM, VM_CPUS, etc.)

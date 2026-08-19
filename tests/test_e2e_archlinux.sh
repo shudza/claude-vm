@@ -308,10 +308,16 @@ phase_launch() {
     fi
 
     # Test: node and gh actually run
-    if _e2e_ssh "$FAKE_PROJECT_A" "node --version && npm --version && gh --version" &>/dev/null; then
+    local ver_failures="" ver_cmd ver_out
+    for ver_cmd in "node --version" "npm --version" "gh --version"; do
+        if ! ver_out=$(_e2e_ssh "$FAKE_PROJECT_A" "$ver_cmd" 2>&1); then
+            ver_failures+="'$ver_cmd' → ${ver_out:0:120}; "
+        fi
+    done
+    if [[ -z "$ver_failures" ]]; then
         pass "node, npm, and gh run in the guest"
     else
-        fail "node/npm/gh run" "one of them failed to execute"
+        fail "node/npm/gh run" "$ver_failures"
     fi
 
     # Test: pacman available (Arch package manager)
