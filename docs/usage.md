@@ -327,11 +327,13 @@ Everything comes from the distro's own repositories and installs in one cloud-in
 
 **Core:** git, curl, jq, ripgrep (rg), less, zip/unzip, gh (GitHub CLI), rsync
 
-**Runtimes:** Node.js + npm (distro version), Python 3, pip, venv, uv (Python package manager), Claude Code
+**Runtimes:** Node.js + npm (distro version), Python 3, pip, venv, Claude Code
 
 **Full** adds:
 
 **Build:** build-essential/base-devel/gcc + g++ + make (per distro), cmake
+
+**Runtimes:** uv (Python package manager)
 
 **Debugging:** strace, lsof, socat, netcat, dig
 

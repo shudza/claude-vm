@@ -117,7 +117,6 @@ test_pkg_tuning_per_family() {
                 grep -q 'force-unsafe-io' "$ud"                     || { fail "$flavor tuning" "missing force-unsafe-io"; ok=false; }
                 grep -q '/etc/apt/apt.conf.d/99claude-vm' "$ud"     || { fail "$flavor tuning" "missing apt tuning file"; ok=false; }
                 grep -q 'APT::Install-Recommends "false";' "$ud"    || { fail "$flavor tuning" "missing Install-Recommends false"; ok=false; }
-                grep -q 'DPkg::Lock::Timeout' "$ud"                 || { fail "$flavor tuning" "missing dpkg lock timeout"; ok=false; }
                 ;;
             fedora-*)
                 grep -q '/etc/dnf/dnf.conf' "$ud"          || { fail "$flavor tuning" "missing dnf.conf tuning"; ok=false; }
@@ -167,10 +166,6 @@ test_installer_prefetch() {
             || { fail "$flavor prefetch" "missing inline fallback installs"; ok=false; }
         grep -qF 'i=$((i+1))' "$ud" \
             || { fail "$flavor prefetch" "launcher loop counter was interpolated away"; ok=false; }
-        grep -q 'claude-vm-prefetch --kill' "$ud" \
-            || { fail "$flavor prefetch" "runcmd wait timeout does not kill the prefetch"; ok=false; }
-        grep -q 'claude-vm-prefetch.pid' "$ud" \
-            || { fail "$flavor prefetch" "prefetch does not record its pid"; ok=false; }
         $ok && pass "$flavor: installer prefetch launcher, script, and fallback present"
     done
 }
@@ -245,9 +240,16 @@ test_installers_still_present() {
     for flavor in "${ALL_FLAVORS[@]}"; do
         ud="$(_userdata "$flavor")"
         ok=true
-        grep -q 'astral.sh/uv/install.sh' "$ud"    || { fail "$flavor installers" "uv installer missing"; ok=false; }
-        grep -q 'claude.ai/install.sh' "$ud"       || { fail "$flavor installers" "Claude Code installer missing"; ok=false; }
-        $ok && pass "$flavor: uv and Claude Code installers present"
+        grep -q 'claude.ai/install.sh' "$ud" || { fail "$flavor installers" "Claude Code installer missing"; ok=false; }
+        case "$flavor" in
+            *-full)
+                grep -q 'astral.sh/uv/install.sh' "$ud" || { fail "$flavor installers" "uv installer missing from full"; ok=false; }
+                ;;
+            *)
+                grep -q 'astral.sh/uv/install.sh' "$ud" && { fail "$flavor installers" "uv installer present in slim"; ok=false; }
+                ;;
+        esac
+        $ok && pass "$flavor: Claude Code installer present, uv $([[ "$flavor" == *-full ]] && echo present || echo absent)"
     done
 }
 

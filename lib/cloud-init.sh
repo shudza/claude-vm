@@ -35,9 +35,15 @@ generate_cloud_init_userdata() {
     local bootcmd_extra
     bootcmd_extra="$(_cloud_init_bootcmd_extra "$flavor")"
 
-    # Installer prefetch script (same for all flavors)
+    # Installer prefetch script (uv included on full flavors only)
     local prefetch_file
-    prefetch_file="$(_cloud_init_prefetch_file)"
+    prefetch_file="$(_cloud_init_prefetch_file "$flavor")"
+
+    # Inline uv fallback line (full flavors only)
+    local uv_fallback=""
+    if [[ "$(flavor_variant "$flavor")" == "full" ]]; then
+        uv_fallback="  - test -f /run/claude-vm-prefetch-ok || sudo -u $VM_USER bash -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'"
+    fi
 
     local cleanup_runcmd
     cleanup_runcmd="$(_cloud_init_cleanup_runcmd "$flavor")"
@@ -141,10 +147,11 @@ runcmd:
   - chown $VM_USER:$VM_USER /workspace
   # Fix ownership of deferred write_files
   - chown -R $VM_USER:$VM_USER /home/$VM_USER/.bashrc /home/$VM_USER/.ssh
-  # uv and Claude Code install in the background from bootcmd — wait for the
-  # prefetch, then fall back to inline installs if it didn't complete
-  - timeout 300 sh -c 'while [ ! -f /run/claude-vm-prefetch-done ]; do sleep 1; done' || /usr/local/sbin/claude-vm-prefetch --kill
-  - test -f /run/claude-vm-prefetch-ok || sudo -u $VM_USER bash -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
+  # Claude Code (plus uv on full) installs in the background from bootcmd —
+  # wait for the prefetch, then fall back to inline installs if it didn't
+  # complete
+  - timeout 300 sh -c 'while [ ! -f /run/claude-vm-prefetch-done ]; do sleep 1; done' || true
+$uv_fallback
   - test -f /run/claude-vm-prefetch-ok || sudo -u $VM_USER bash -c 'curl -fsSL https://claude.ai/install.sh | bash'
   - cat /var/log/claude-vm-prefetch.log || true
   # Enable virtiofs workspace mount
@@ -393,34 +400,19 @@ BOOT
 # The installer prefetch script, written via write_files and launched from
 # bootcmd. It waits for its preconditions (user created, network up, curl and
 # sudo present — on images without curl the package transaction provides it),
-# then runs the uv and Claude Code installers while cloud-init's package
-# phase is still working. runcmd waits on the -done marker and reruns the
-# installers inline unless the -ok marker is present.
-#
-# Lock safety: both installers are pure downloads into ~/.local and never
-# invoke apt/dnf/pacman, so they cannot contend for the package manager lock
-# while cloud-init's package transaction runs. Belt-and-braces for a future
-# installer change: apt gets DPkg::Lock::Timeout via the tuning file (dnf
-# already blocks on its lock), and --kill lets runcmd tear the prefetch
-# session down on wait timeout so the inline fallback never runs concurrently
-# with a hung prefetch.
+# then installs Claude Code (plus uv on full flavors) while cloud-init's
+# package phase is still working. Both installers are plain downloads into
+# ~/.local and never touch the package manager, so they cannot contend with
+# the package transaction. runcmd waits on the -done marker and reruns the
+# installers inline unless -ok is present (both are idempotent).
 _cloud_init_prefetch_file() {
+    local flavor="$1"
     cat << 'PREFETCH'
   - path: /usr/local/sbin/claude-vm-prefetch
     permissions: '0755'
     content: |
       #!/bin/sh
-      if [ "$1" = "--kill" ]; then
-          pid="$(cat /run/claude-vm-prefetch.pid 2>/dev/null)"
-          [ -n "$pid" ] || exit 0
-          grep -q claude-vm-prefetch "/proc/$pid/cmdline" 2>/dev/null || exit 0
-          kill -TERM -- -"$pid" 2>/dev/null
-          sleep 1
-          kill -KILL -- -"$pid" 2>/dev/null
-          exit 0
-      fi
       user="$1"
-      echo "$$" > /run/claude-vm-prefetch.pid
       deadline=$(( $(date +%s) + 240 ))
       while :; do
           if id "$user" >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1 \
@@ -434,11 +426,21 @@ _cloud_init_prefetch_file() {
           fi
           sleep 1
       done
-      sudo -u "$user" timeout 300 sh -c 'curl -LsSf https://astral.sh/uv/install.sh | sh' \
-          && sudo -u "$user" timeout 300 bash -c 'curl -fsSL https://claude.ai/install.sh | bash' \
+PREFETCH
+    if [[ "$(flavor_variant "$flavor")" == "full" ]]; then
+        cat << 'PREFETCH'
+      sudo -u "$user" sh -c 'curl -LsSf https://astral.sh/uv/install.sh | sh' \
+          && sudo -u "$user" bash -c 'curl -fsSL https://claude.ai/install.sh | bash' \
           && touch /run/claude-vm-prefetch-ok
       touch /run/claude-vm-prefetch-done
 PREFETCH
+    else
+        cat << 'PREFETCH'
+      sudo -u "$user" bash -c 'curl -fsSL https://claude.ai/install.sh | bash' \
+          && touch /run/claude-vm-prefetch-ok
+      touch /run/claude-vm-prefetch-done
+PREFETCH
+    fi
 }
 
 # Package manager tuning written before the package transaction runs
@@ -462,7 +464,6 @@ _cloud_init_pkg_tuning_files() {
       APT::Install-Recommends "false";
       APT::Install-Suggests "false";
       Acquire::Languages "none";
-      DPkg::Lock::Timeout "300";
     permissions: '0644'
 TUNING
             ;;

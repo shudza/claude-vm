@@ -158,9 +158,9 @@ See [docs/architecture.md](docs/architecture.md) for the full design.
 
 All packages come from the distro's own repositories and install in a single cloud-init transaction — no third-party apt repos.
 
-**Slim** (every flavor): git, ripgrep, jq, less, gh (GitHub CLI), curl, zip/unzip, rsync, Node.js + npm, Python 3 (with pip and venv), uv (Python package manager), Claude Code.
+**Slim** (every flavor): git, ripgrep, jq, less, gh (GitHub CLI), curl, zip/unzip, rsync, Node.js + npm, Python 3 (with pip and venv), Claude Code.
 
-**Full** adds: build tools (build-essential/base-devel/gcc + cmake), tmux, vim, tree, xxd, file, sqlite3, bc, ping, lsof, socat, netcat, dig, strace, patch, wget, gnupg.
+**Full** adds: build tools (build-essential/base-devel/gcc + cmake), uv (Python package manager), tmux, vim, tree, xxd, file, sqlite3, bc, ping, lsof, socat, netcat, dig, strace, patch, wget, gnupg.
 
 Node.js comes from the distro repos: 20.x on Debian 13, 18.x on Ubuntu 24.04, current releases on Arch and Fedora. Need something newer? Claude Code has full sudo access — install it at runtime via NodeSource or nvm, like any other missing tool.
 
