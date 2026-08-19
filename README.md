@@ -72,7 +72,7 @@ cd ~/my-project
 claude-vm
 ```
 
-First run builds a base image (~90s), creates a project snapshot, and launches the VM. Subsequent runs resume in seconds.
+First run builds a base image (about a minute plus the cloud image download), creates a project snapshot, and launches the VM. Subsequent runs resume in seconds.
 
 ## Commands
 
@@ -99,7 +99,7 @@ See [docs/usage.md](docs/usage.md) for the full reference with all flags and exa
 ```bash
 claude-vm config set VM_RAM 8G
 claude-vm config set VM_CPUS 4
-claude-vm config set FLAVOR debian
+claude-vm config set FLAVOR debian-slim
 claude-vm config set VM_USER alice
 claude-vm config set SSH_PORT_BASE 10022
 claude-vm config set FORWARD_PORTS "8080,3000:3000"   # per-project
@@ -111,7 +111,7 @@ Or edit directly:
 
 ```bash
 # ~/.claude-vm/config
-FLAVOR="debian"
+FLAVOR="debian-slim"
 VM_USER="alice"
 VM_RAM="8G"
 VM_CPUS="4"
@@ -123,18 +123,24 @@ Environment variables override config: `VM_RAM=16G claude-vm`. `FORWARD_PORTS` i
 
 ## Flavors
 
+Every distro comes in two variants: **slim** (fast to build — git, Node.js, Python, gh, and core tools) and **full** (slim plus build tools, tmux, vim, and debug utilities). Bare distro names (`debian`, `ubuntu`, ...) alias to the `-full` variant for backward compatibility.
+
 | Flavor | Base Image | Notes |
 |-|-|-|
-| `debian` (default) | Debian 13 (trixie) genericcloud | Minimal, no snapd |
-| `ubuntu` | Ubuntu 24.04 minimal | snapd auto-removed |
-| `archlinux` | Arch Linux cloud image | Rolling release, uses pacman |
-| `fedora` | Fedora 41 Cloud Base | Uses dnf |
+| `debian-slim` (default) | Debian 13 (trixie) genericcloud | Minimal, no snapd |
+| `debian-full` | Debian 13 (trixie) genericcloud | Adds build-essential, cmake, tmux, ... |
+| `ubuntu-slim` / `ubuntu-full` | Ubuntu 24.04 minimal | snapd auto-removed |
+| `archlinux-slim` / `archlinux-full` | Arch Linux cloud image | Rolling release, uses pacman |
+| `fedora-slim` / `fedora-full` | Fedora 41 Cloud Base | Uses dnf |
 
 ```bash
-claude-vm build --flavor ubuntu
-claude-vm build --flavor archlinux
-claude-vm build --flavor fedora
+claude-vm build --flavor debian-full
+claude-vm build --flavor ubuntu-slim
+claude-vm build --flavor fedora-slim
+claude-vm build --flavor ubuntu        # alias for ubuntu-full
 ```
+
+Each flavor gets its own base image (`~/.claude-vm/base/base-<flavor>.qcow2`), so multiple flavors coexist — different projects can use different flavors side by side.
 
 ## How It Works
 
@@ -144,23 +150,19 @@ claude-vm build --flavor fedora
 4. **Config sync** (rsync) copies your Claude Code settings, git identity, and gh auth into the VM on first VM creation
 5. **SSH** connects your terminal to Claude Code running inside the VM
 
-The base image is ~1.5GB. Each project snapshot starts at ~200KB and grows only as the VM writes to its own disk (package installs, caches, etc.). QEMU is configured with `discard=unmap` so that deleted files are reclaimed from the overlay via fstrim, keeping snapshots compact over time. Background services that would silently grow snapshots (unattended-upgrades, apt timers, man-db rebuilds) are disabled during provisioning.
+A base image is roughly 1–1.5GB depending on variant (each flavor keeps its own `base-<flavor>.qcow2`). Each project snapshot starts at ~200KB and grows only as the VM writes to its own disk (package installs, caches, etc.). QEMU is configured with `discard=unmap` so that deleted files are reclaimed from the overlay via fstrim, keeping snapshots compact over time. Background services that would silently grow snapshots (unattended-upgrades, apt timers, man-db rebuilds) are disabled during provisioning.
 
 See [docs/architecture.md](docs/architecture.md) for the full design.
 
 ## Pre-installed Tools
 
-The base image includes everything Claude Code commonly reaches for:
+All packages come from the distro's own repositories and install in a single cloud-init transaction — no third-party apt repos.
 
-**Core:** git, ripgrep, gh (GitHub CLI), curl, jq
+**Slim** (every flavor): git, ripgrep, jq, less, gh (GitHub CLI), curl, zip/unzip, rsync, Node.js + npm, Python 3 (with pip and venv), uv (Python package manager), Claude Code.
 
-**Runtimes:** Node.js 22, Python 3 (with pip and venv), uv (Python package manager)
+**Full** adds: build tools (build-essential/base-devel/gcc + cmake), tmux, vim, tree, xxd, file, sqlite3, bc, ping, lsof, socat, netcat, dig, strace, patch, wget, gnupg.
 
-**Debug:** lsof, socat, netcat
-
-**Utilities:** tmux, vim, xxd, sqlite3, bc, ping, tree, rsync, file, patch, unzip
-
-Claude Code has full sudo access to install anything else at runtime.
+Node.js comes from the distro repos: 20.x on Debian 13, 18.x on Ubuntu 24.04, current releases on Arch and Fedora. Need something newer? Claude Code has full sudo access — install it at runtime via NodeSource or nvm, like any other missing tool.
 
 ## Multiple Instances
 

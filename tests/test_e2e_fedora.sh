@@ -4,7 +4,7 @@
 # Runs real QEMU VMs with virtiofs, testing the full CLI workflow:
 #   build → launch → use → stop → resume → reset → destroy
 #
-# Mirrors test_e2e.sh but uses FLAVOR=fedora.
+# Mirrors test_e2e.sh but uses FLAVOR=fedora-slim.
 #
 # Prerequisites: /dev/kvm, qemu-system-x86_64, virtiofsd, genisoimage, etc.
 # Skips gracefully (exit 0) if prerequisites are missing.
@@ -84,7 +84,7 @@ setup_e2e() {
     E2E_DIR="$(mktemp -d /tmp/claude-vm-e2e-fedora-XXXXXX)"
     export CLAUDE_VM_DIR="$E2E_DIR/data"
     export SSH_PORT_BASE=17022
-    export FLAVOR=fedora
+    export FLAVOR=fedora-slim
     export CLAUDE_VM_QUIET=true
 
     FAKE_PROJECT_A="$E2E_DIR/project-fedora-a"
@@ -161,8 +161,8 @@ phase_build() {
     echo "=== Phase 1: Build ==="
 
     local output
-    if output=$(timeout 600 bash "$CLAUDE_VM" build --flavor fedora 2>&1); then
-        local base_img="$CLAUDE_VM_DIR/base/base.qcow2"
+    if output=$(timeout 600 bash "$CLAUDE_VM" build --flavor fedora-slim 2>&1); then
+        local base_img="$CLAUDE_VM_DIR/base/base-fedora-slim.qcow2"
         if [[ -f "$base_img" ]] && qemu-img check "$base_img" &>/dev/null; then
             pass "build creates valid base image"
         else
@@ -181,7 +181,7 @@ phase_build() {
     # Test: build is idempotent
     local start_time
     start_time=$(date +%s)
-    output=$(timeout 30 bash "$CLAUDE_VM" build --flavor fedora 2>&1) || true
+    output=$(timeout 30 bash "$CLAUDE_VM" build --flavor fedora-slim 2>&1) || true
     local elapsed=$(( $(date +%s) - start_time ))
     if echo "$output" | grep -q "already exists" && (( elapsed < 10 )); then
         pass "build is idempotent (${elapsed}s, prints 'already exists')"
@@ -220,7 +220,7 @@ phase_launch() {
     # Test: snapshot exists with correct backing
     local hash base_img snap_path
     hash=$(echo -n "$FAKE_PROJECT_A" | sha256sum | cut -c1-12)
-    base_img="$CLAUDE_VM_DIR/base/base.qcow2"
+    base_img="$CLAUDE_VM_DIR/base/base-fedora-slim.qcow2"
     snap_path="$CLAUDE_VM_DIR/snapshots/${hash}.qcow2"
     if [[ -f "$snap_path" ]]; then
         local backing
@@ -287,17 +287,38 @@ phase_launch() {
         fail "virtiofs write" "file not visible on host"
     fi
 
-    # Test: core packages installed (these come from the packages: block in cloud-init)
+    # Test: slim packages installed (these come from the packages: block in cloud-init)
     local missing_pkgs=()
-    for pkg in git rsync jq ripgrep curl socat tmux tree openssh-server; do
+    for pkg in git rsync jq ripgrep curl less zip unzip gh nodejs openssh-server; do
         if ! _e2e_ssh "$FAKE_PROJECT_A" "rpm -q $pkg" &>/dev/null; then
             missing_pkgs+=("$pkg")
         fi
     done
     if (( ${#missing_pkgs[@]} == 0 )); then
-        pass "core packages installed (rpm -q)"
+        pass "slim packages installed (rpm -q)"
     else
-        fail "core packages installed" "missing: ${missing_pkgs[*]}"
+        fail "slim packages installed" "missing: ${missing_pkgs[*]}"
+    fi
+
+    # Test: npm present (dnf resolves the npm name to the nodejs-npm rpm)
+    if _e2e_ssh "$FAKE_PROJECT_A" "command -v npm" &>/dev/null; then
+        pass "npm available (nodejs-npm)"
+    else
+        fail "npm available" "command -v npm failed"
+    fi
+
+    # Test: full-only packages are NOT in the slim image
+    if ! _e2e_ssh "$FAKE_PROJECT_A" "rpm -q tmux" &>/dev/null; then
+        pass "full-only package (tmux) absent from slim image"
+    else
+        fail "slim excludes full tools" "tmux is installed in slim image"
+    fi
+
+    # Test: node and gh actually run
+    if _e2e_ssh "$FAKE_PROJECT_A" "node --version && npm --version && gh --version" &>/dev/null; then
+        pass "node, npm, and gh run in the guest"
+    else
+        fail "node/npm/gh run" "one of them failed to execute"
     fi
 
     # Test: dnf available (Fedora package manager)

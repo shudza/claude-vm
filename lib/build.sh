@@ -144,7 +144,7 @@ build_base_image() {
     echo "==> Step 3/4: Generating cloud-init config..."
     create_cloud_init_iso "$CLOUD_INIT_DIR" "$ci_iso" || return $?
 
-    echo "==> Step 4/4: Provisioning base image (this takes ~90 seconds)..."
+    echo "==> Step 4/4: Provisioning base image (flavor: $FLAVOR, usually under two minutes)..."
     provision_base_image "$build_img" "$ci_iso" || return $?
 
     mv "$build_img" "$base_img" || return $?
@@ -214,7 +214,7 @@ check_build_prerequisites() {
 provision_base_image() {
     local build_img="$1"
     local ci_iso="$2"
-    local timeout=600  # 10 minute absolute timeout (npm + nodejs install can be slow)
+    local timeout=600  # 10 minute absolute timeout (headroom for slow mirrors/TCG)
     local accel="kvm"
 
     # Check KVM availability
@@ -298,7 +298,7 @@ provision_base_image() {
             # Show last meaningful line from serial log
             if [[ -f "$serial_log" ]]; then
                 local last_line
-                last_line=$(grep -E '(cloud-init|Installing|Setting up|Unpacking|apt|npm)' "$serial_log" 2>/dev/null | tail -1 || true)
+                last_line=$(grep -E '(cloud-init|Installing|Setting up|Unpacking|apt|dnf|pacman)' "$serial_log" 2>/dev/null | tail -1 || true)
                 if [[ -n "$last_line" ]]; then
                     echo "    > ${last_line:0:80}"
                 fi

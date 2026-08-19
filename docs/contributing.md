@@ -47,9 +47,10 @@ docs/
 
 ### Flavors
 
-- Flavor data lives in the associative arrays in `lib/config.sh` (`FLAVOR_IMAGE_URL`, `FLAVOR_IMAGE_NAME`, `FLAVOR_PKG_FAMILY`).
-- Cloud-init differences are handled by the `_cloud_init_*` helper functions in `lib/cloud-init.sh`, dispatched by flavor name.
-- Adding a new flavor means: add entries to the three arrays, add cases to each `_cloud_init_*` function.
+- Flavor names are `<distro>-<variant>` (variant: `slim` or `full`); bare distro names alias to `-full` via `normalize_flavor`.
+- Registry data lives in the associative arrays in `lib/config.sh` (`FLAVOR_IMAGE_URL`, `FLAVOR_IMAGE_NAME`, `FLAVOR_CHECKSUM_URL`, `FLAVOR_CHECKSUM_TYPE`), keyed by distro — slim and full share the upstream image.
+- Cloud-init differences are handled by the `_cloud_init_*` helper functions in `lib/cloud-init.sh`, dispatched on `flavor_distro`; `_cloud_init_packages` emits the slim set and appends the full extras when `flavor_variant` is `full`.
+- Adding a new distro means: add entries to the four arrays, add cases to each `_cloud_init_*` function.
 
 ### UI
 
@@ -87,10 +88,12 @@ docs/
 
 ## Adding a New Flavor
 
-1. In `lib/config.sh`, add entries to `FLAVOR_IMAGE_URL`, `FLAVOR_IMAGE_NAME`, and `FLAVOR_PKG_FAMILY`.
-2. In `lib/cloud-init.sh`, add cases to `_cloud_init_packages`, `_cloud_init_nodejs_runcmd`, `_cloud_init_gh_runcmd`, `_cloud_init_cleanup_runcmd`, and `_cloud_init_ssh_service`.
-3. Update `docs/usage.md` flavor table.
-4. Test with `claude-vm build --flavor <name>`.
+Flavors are `<distro>-slim` and `<distro>-full`; adding a distro adds both variants.
+
+1. In `lib/config.sh`, add entries to `FLAVOR_IMAGE_URL`, `FLAVOR_IMAGE_NAME`, `FLAVOR_CHECKSUM_URL`, and `FLAVOR_CHECKSUM_TYPE` (keyed by distro).
+2. In `lib/cloud-init.sh`, add distro cases to `_cloud_init_packages` (slim set + full extras), `_cloud_init_pkg_tuning_files`, `_cloud_init_cleanup_runcmd`, and `_cloud_init_ssh_service`.
+3. Add the distro to the flavor loops in `tests/test_cloud_init.sh` and update the `docs/usage.md` flavor table.
+4. Test with `claude-vm build --flavor <distro>-slim` and `--flavor <distro>-full`.
 
 ## Running Tests
 

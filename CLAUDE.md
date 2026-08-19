@@ -8,8 +8,8 @@ and QCOW2 linked snapshots for per-project isolation.
 Host runs `claude-vm` which manages QEMU VMs with virtiofs mounts of `$PWD` → `/workspace`.
 
 **Snapshot strategy:**
-- Base image (`~/.claude-vm/base/base.qcow2`): golden image provisioned via cloud-init
-- Linked snapshots (`~/.claude-vm/snapshots/<hash>.qcow2`): COW deltas per project (12-char SHA-256 of abs path)
+- Base images (`~/.claude-vm/base/base-<flavor>.qcow2`): golden images provisioned via cloud-init, one per flavor (`<distro>-{slim,full}`; bare distro names alias to full). Legacy `base.qcow2` backings still verify; `rebase` migrates them
+- Linked snapshots (`~/.claude-vm/snapshots/<hash>.qcow2`): COW deltas per project (12-char SHA-256 of abs path); the embedded backing reference records the flavor
 - Sidecar metadata (`<hash>.project`): stores project dir path
 
 **Launch flow:** check running → build base if missing → create snapshot if missing →
@@ -56,8 +56,9 @@ carry over; local-scoped (`projects["<host-path>"]`) don't — the VM mounts at 
 
 **Adding a command:** `cmd_<name>` function in `claude-vm` → case in `main()` → usage line in `usage()`
 
-**Adding a flavor:** entries in `FLAVOR_IMAGE_URL/NAME/PKG_FAMILY` arrays in `config.sh` →
-cases in `_cloud_init_*` functions in `cloud-init.sh`
+**Adding a flavor:** entries in `FLAVOR_IMAGE_URL/NAME/CHECKSUM_URL/CHECKSUM_TYPE` arrays
+in `config.sh` (keyed by distro; slim/full share the image) → distro cases in
+`_cloud_init_*` functions in `cloud-init.sh` (slim package set + full extras)
 
 **Adding a config key:** `DEFAULT_*` constant in `config.sh` → handle in `load_config` →
 validate in `set_config_value` → add to `get` case in `claude-vm`

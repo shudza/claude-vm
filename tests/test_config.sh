@@ -672,6 +672,153 @@ test_rebase_backup_paths_validation() {
     _reset_config_env
 }
 
+test_default_flavor_is_debian_slim() {
+    _reset_config_env
+    unset FLAVOR 2>/dev/null || true
+    export CLAUDE_VM_DIR="$TEST_DIR/test-flavor-default"
+    export CLAUDE_VM_CONFIG="$CLAUDE_VM_DIR/config"
+
+    source "$PROJECT_DIR/lib/config.sh"
+    load_config
+
+    if [[ "$FLAVOR" == "debian-slim" ]]; then
+        pass "default flavor is debian-slim"
+    else
+        fail "default flavor" "expected debian-slim, got $FLAVOR"
+    fi
+    _reset_config_env
+    unset FLAVOR 2>/dev/null || true
+}
+
+test_flavor_normalization() {
+    _reset_config_env
+    export CLAUDE_VM_DIR="$TEST_DIR/test-flavor-normalize"
+    export CLAUDE_VM_CONFIG="$CLAUDE_VM_DIR/config"
+
+    source "$PROJECT_DIR/lib/config.sh"
+
+    local ok=true bare
+    for bare in debian ubuntu archlinux fedora; do
+        if [[ "$(normalize_flavor "$bare")" != "${bare}-full" ]]; then
+            fail "normalize $bare" "expected ${bare}-full, got $(normalize_flavor "$bare")"
+            ok=false
+        fi
+    done
+    $ok && pass "bare distro names normalize to -full"
+
+    if [[ "$(normalize_flavor "fedora-slim")" == "fedora-slim" ]]; then
+        pass "normalized names pass through unchanged"
+    else
+        fail "normalize passthrough" "got $(normalize_flavor "fedora-slim")"
+    fi
+
+    if normalize_flavor "bogus" >/dev/null 2>&1 || normalize_flavor "bogus-slim" >/dev/null 2>&1; then
+        fail "normalize unknown" "bogus flavor accepted"
+    else
+        pass "unknown flavors are rejected by normalize_flavor"
+    fi
+
+    if [[ "$(flavor_distro "archlinux-slim")" == "archlinux" && "$(flavor_variant "archlinux-slim")" == "slim" \
+          && "$(flavor_distro "debian")" == "debian" && "$(flavor_variant "debian")" == "full" ]]; then
+        pass "flavor_distro/flavor_variant split names correctly"
+    else
+        fail "flavor split" "distro/variant mismatch"
+    fi
+
+    export FLAVOR="debian"
+    load_config
+    if [[ "$FLAVOR" == "debian-full" ]]; then
+        pass "load_config normalizes bare env FLAVOR to debian-full"
+    else
+        fail "load_config normalization" "expected debian-full, got $FLAVOR"
+    fi
+
+    export FLAVOR="not-a-distro"
+    if load_config 2>/dev/null && [[ "$FLAVOR" == "debian-slim" ]]; then
+        pass "load_config falls back to debian-slim on unknown flavor"
+    else
+        fail "load_config fallback" "got $FLAVOR"
+    fi
+    _reset_config_env
+    unset FLAVOR 2>/dev/null || true
+}
+
+test_set_config_flavor_values() {
+    _reset_config_env
+    unset FLAVOR 2>/dev/null || true
+    export CLAUDE_VM_DIR="$TEST_DIR/test-set-flavor"
+    export CLAUDE_VM_CONFIG="$CLAUDE_VM_DIR/config"
+
+    source "$PROJECT_DIR/lib/config.sh"
+
+    local ok=true f
+    for f in debian-slim debian-full ubuntu-slim ubuntu-full archlinux-slim archlinux-full fedora-slim fedora-full; do
+        if ! set_config_value "FLAVOR" "$f" >/dev/null 2>&1; then
+            fail "set FLAVOR $f" "rejected"
+            ok=false
+        fi
+    done
+    $ok && pass "set_config_value accepts all 8 normalized flavors"
+
+    ok=true
+    for f in debian ubuntu archlinux fedora; do
+        if ! set_config_value "FLAVOR" "$f" >/dev/null 2>&1; then
+            fail "set FLAVOR bare $f" "rejected"
+            ok=false
+        fi
+    done
+    $ok && pass "set_config_value accepts bare distro names"
+
+    set_config_value "FLAVOR" "ubuntu" >/dev/null 2>&1
+    if grep -q 'FLAVOR="ubuntu-full"' "$CLAUDE_VM_CONFIG"; then
+        pass "bare name is stored normalized (ubuntu → ubuntu-full)"
+    else
+        fail "stored normalized" "$(grep '^FLAVOR=' "$CLAUDE_VM_CONFIG")"
+    fi
+
+    if set_config_value "FLAVOR" "bogus" 2>/dev/null; then
+        fail "reject bogus flavor" "accepted"
+    else
+        pass "set_config_value rejects unknown flavors"
+    fi
+    _reset_config_env
+    unset FLAVOR 2>/dev/null || true
+}
+
+test_base_image_path_is_flavor_keyed() {
+    _reset_config_env
+    unset FLAVOR 2>/dev/null || true
+    export CLAUDE_VM_DIR="$TEST_DIR/test-flavor-base-path"
+    export CLAUDE_VM_CONFIG="$CLAUDE_VM_DIR/config"
+
+    source "$PROJECT_DIR/lib/config.sh"
+    load_config
+
+    if [[ "$(base_image_path)" == "$CLAUDE_VM_DIR/base/base-debian-slim.qcow2" ]]; then
+        pass "base_image_path uses the default flavor"
+    else
+        fail "base_image_path default" "got $(base_image_path)"
+    fi
+
+    export FLAVOR="fedora-slim"
+    load_config
+    if [[ "$(base_image_path)" == "$CLAUDE_VM_DIR/base/base-fedora-slim.qcow2" ]]; then
+        pass "base_image_path changes with FLAVOR"
+    else
+        fail "base_image_path flavor-keyed" "got $(base_image_path)"
+    fi
+
+    export FLAVOR="ubuntu"
+    load_config
+    if [[ "$(base_image_path)" == "$CLAUDE_VM_DIR/base/base-ubuntu-full.qcow2" ]]; then
+        pass "base_image_path uses the normalized flavor for bare names"
+    else
+        fail "base_image_path bare name" "got $(base_image_path)"
+    fi
+    _reset_config_env
+    unset FLAVOR 2>/dev/null || true
+}
+
 # ─── Run ──────────────────────────────────────────────────────────────────────
 
 echo "=== claude-vm config tests ==="
@@ -699,6 +846,10 @@ run_test test_default_rebase_backup_paths
 run_test test_set_config_rebase_backup_paths
 run_test test_rebase_backup_paths_env_override
 run_test test_rebase_backup_paths_validation
+run_test test_default_flavor_is_debian_slim
+run_test test_flavor_normalization
+run_test test_set_config_flavor_values
+run_test test_base_image_path_is_flavor_keyed
 
 echo ""
 echo "Results: ${TESTS_PASSED} passed, ${TESTS_FAILED} failed, ${TESTS_RUN} total"

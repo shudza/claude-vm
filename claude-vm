@@ -50,16 +50,21 @@ Usage:
   claude-vm help                      Show this help
 
 Flavors:
-  debian (default)              Debian 13 (trixie) genericcloud — minimal, no snapd
-  ubuntu                        Ubuntu 24.04 minimal cloud image
-  archlinux                     Arch Linux cloud image (rolling release)
-  fedora                        Fedora 41 Cloud Base
+  Each distro comes in two variants: -slim (git, node, python, gh + core
+  tools) and -full (slim + build tools, tmux, vim, debug utilities).
+  Bare distro names (debian, ubuntu, ...) alias to the -full variant.
+
+  debian-slim (default)         Debian 13 (trixie) genericcloud — minimal, no snapd
+  debian-full                   Debian 13 with build tools and extra utilities
+  ubuntu-slim / ubuntu-full     Ubuntu 24.04 minimal cloud image
+  archlinux-slim / archlinux-full   Arch Linux cloud image (rolling release)
+  fedora-slim / fedora-full     Fedora 41 Cloud Base
 
 Configuration:
   ~/.claude-vm/config           Config file (FLAVOR, VM_RAM, VM_CPUS, etc.)
 
   Configurable keys:
-    FLAVOR          Base image flavor (default: debian)
+    FLAVOR          Base image flavor (default: debian-slim)
     VM_USER         Guest username (default: $USER)
     VM_RAM          RAM allocation (default: 4G)
     VM_CPUS         CPU cores (default: 2)
@@ -195,14 +200,17 @@ cmd_build() {
 
     # Apply flavor override (takes priority over config file)
     if [[ -n "$flavor_override" ]]; then
-        if ! is_valid_flavor "$flavor_override"; then
+        local normalized distro
+        if ! normalized="$(normalize_flavor "$flavor_override")"; then
             echo "Unknown flavor: $flavor_override" >&2
             echo "Valid flavors: $(valid_flavors | tr '\n' ' ')" >&2
+            echo "Bare distro names (debian, ubuntu, ...) alias to the -full variant." >&2
             return 1
         fi
-        FLAVOR="$flavor_override"
-        BASE_IMAGE_URL="${FLAVOR_IMAGE_URL[$FLAVOR]}"
-        BASE_IMAGE_NAME="${FLAVOR_IMAGE_NAME[$FLAVOR]}"
+        FLAVOR="$normalized"
+        distro="$(flavor_distro "$FLAVOR")"
+        BASE_IMAGE_URL="${FLAVOR_IMAGE_URL[$distro]}"
+        BASE_IMAGE_NAME="${FLAVOR_IMAGE_NAME[$distro]}"
     fi
 
     ensure_dirs
@@ -360,7 +368,7 @@ cmd_destroy() {
 
     if $all; then
         echo "This will remove ALL claude-vm data:"
-        echo "  Base image: $(base_image_path)"
+        echo "  All base images: $BASE_IMAGES_DIR/"
         echo "  All snapshots: $SNAPSHOTS_DIR/"
         echo "  All run data: $RUN_DIR/"
         echo ""
@@ -502,10 +510,14 @@ cmd_list() {
     fi
 
     echo ""
-    echo "Base image:"
-    if base_image_exists; then
-        echo "  $(du -h "$(base_image_path)" | cut -f1)  $(base_image_path)"
-    else
+    echo "Base images:"
+    local base_img base_found=false
+    for base_img in "$BASE_IMAGES_DIR"/base*.qcow2; do
+        [[ -f "$base_img" ]] || continue
+        base_found=true
+        echo "  $(du -h "$base_img" | cut -f1)  $base_img"
+    done
+    if [[ "$base_found" != true ]]; then
         echo "  (not built)"
     fi
 }
@@ -544,9 +556,13 @@ cmd_status() {
     fi
 
     echo ""
-    if base_image_exists; then
-        echo "Base image: $(du -h "$(base_image_path)" | cut -f1)"
-    else
+    local base_img base_found=false
+    for base_img in "$BASE_IMAGES_DIR"/base*.qcow2; do
+        [[ -f "$base_img" ]] || continue
+        base_found=true
+        echo "Base image: $(du -h "$base_img" | cut -f1)  $(basename "$base_img")"
+    done
+    if [[ "$base_found" != true ]]; then
         echo "Base image: (not built)"
     fi
 }

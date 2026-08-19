@@ -83,6 +83,7 @@ check_prerequisites() {
 E2E_DIR=""
 FAKE_PROJECT_A=""
 FAKE_PROJECT_B=""
+FAKE_PROJECT_C=""
 
 setup_e2e() {
     E2E_DIR="$(mktemp -d /tmp/claude-vm-e2e-XXXXXX)"
@@ -92,9 +93,11 @@ setup_e2e() {
 
     FAKE_PROJECT_A="$E2E_DIR/project-a"
     FAKE_PROJECT_B="$E2E_DIR/project-b"
-    mkdir -p "$FAKE_PROJECT_A" "$FAKE_PROJECT_B"
+    FAKE_PROJECT_C="$E2E_DIR/project-c"
+    mkdir -p "$FAKE_PROJECT_A" "$FAKE_PROJECT_B" "$FAKE_PROJECT_C"
     echo "hello from project A" > "$FAKE_PROJECT_A/testfile.txt"
     echo "hello from project B" > "$FAKE_PROJECT_B/testfile.txt"
+    echo "hello from project C" > "$FAKE_PROJECT_C/testfile.txt"
 }
 
 cleanup_e2e() {
@@ -175,10 +178,10 @@ phase_build() {
     echo ""
     echo "=== Phase 1: Build ==="
 
-    # Test: build creates base image
+    # Test: build creates base image (default flavor is debian-slim)
     local output
     if output=$(timeout 600 bash "$CLAUDE_VM" build 2>&1); then
-        local base_img="$CLAUDE_VM_DIR/base/base.qcow2"
+        local base_img="$CLAUDE_VM_DIR/base/base-debian-slim.qcow2"
         if [[ -f "$base_img" ]] && qemu-img check "$base_img" &>/dev/null; then
             pass "build creates valid base image"
         else
@@ -236,7 +239,7 @@ phase_launch() {
     # Test: snapshot exists with correct backing
     local hash base_img snap_path
     hash=$(echo -n "$FAKE_PROJECT_A" | sha256sum | cut -c1-12)
-    base_img="$CLAUDE_VM_DIR/base/base.qcow2"
+    base_img="$CLAUDE_VM_DIR/base/base-debian-slim.qcow2"
     snap_path="$CLAUDE_VM_DIR/snapshots/${hash}.qcow2"
     if [[ -f "$snap_path" ]]; then
         local backing
@@ -294,17 +297,31 @@ phase_launch() {
         fail "virtiofs write" "file not visible on host"
     fi
 
-    # Test: core packages installed (these come from the packages: block in cloud-init)
+    # Test: slim packages installed (these come from the packages: block in cloud-init)
     local missing_pkgs=()
-    for pkg in git rsync jq ripgrep curl socat tmux tree; do
+    for pkg in git rsync jq ripgrep curl less zip unzip gh nodejs npm python3-venv; do
         if ! _e2e_ssh "$FAKE_PROJECT_A" "dpkg -s $pkg" &>/dev/null; then
             missing_pkgs+=("$pkg")
         fi
     done
     if (( ${#missing_pkgs[@]} == 0 )); then
-        pass "core packages installed (dpkg -s)"
+        pass "slim packages installed (dpkg -s)"
     else
-        fail "core packages installed" "missing: ${missing_pkgs[*]}"
+        fail "slim packages installed" "missing: ${missing_pkgs[*]}"
+    fi
+
+    # Test: full-only packages are NOT in the slim image
+    if ! _e2e_ssh "$FAKE_PROJECT_A" "dpkg -s tmux" &>/dev/null; then
+        pass "full-only package (tmux) absent from slim image"
+    else
+        fail "slim excludes full tools" "tmux is installed in slim image"
+    fi
+
+    # Test: node and gh actually run
+    if _e2e_ssh "$FAKE_PROJECT_A" "node --version && npm --version && gh --version" &>/dev/null; then
+        pass "node, npm, and gh run in the guest"
+    else
+        fail "node/npm/gh run" "one of them failed to execute"
     fi
 
     # Test: Claude Code installed
@@ -448,7 +465,7 @@ phase_rebase() {
 
     # Record old base image mtime
     local old_base_mtime
-    old_base_mtime=$(stat -c%Y "$CLAUDE_VM_DIR/base/base.qcow2" 2>/dev/null || echo 0)
+    old_base_mtime=$(stat -c%Y "$CLAUDE_VM_DIR/base/base-debian-slim.qcow2" 2>/dev/null || echo 0)
 
     # Record old snapshot path
     local old_snap_path="$snap_a"
@@ -468,7 +485,7 @@ phase_rebase() {
 
     # Test: base image mtime is newer
     local new_base_mtime
-    new_base_mtime=$(stat -c%Y "$CLAUDE_VM_DIR/base/base.qcow2" 2>/dev/null || echo 0)
+    new_base_mtime=$(stat -c%Y "$CLAUDE_VM_DIR/base/base-debian-slim.qcow2" 2>/dev/null || echo 0)
     if (( new_base_mtime > old_base_mtime )); then
         pass "base image rebuilt (mtime newer)"
     else
@@ -580,6 +597,91 @@ phase_destroy() {
     _e2e_cmd "$FAKE_PROJECT_B" stop &>/dev/null || true
 }
 
+# ── Phase 9: Full flavor ────────────────────────────────────────────────────
+
+phase_full_flavor() {
+    echo ""
+    echo "=== Phase 9: Full flavor (debian-full) ==="
+    _require_phase "full flavor" || return
+
+    local slim_base="$CLAUDE_VM_DIR/base/base-debian-slim.qcow2"
+    local full_base="$CLAUDE_VM_DIR/base/base-debian-full.qcow2"
+
+    # Test: building debian-full creates its own base image
+    local output
+    if output=$(timeout 600 bash "$CLAUDE_VM" build --flavor debian-full 2>&1); then
+        if [[ -f "$full_base" ]] && qemu-img check "$full_base" &>/dev/null; then
+            pass "debian-full build creates its own base image"
+        else
+            fail "debian-full build" "base image missing or corrupt"
+            return
+        fi
+    else
+        fail "debian-full build" "claude-vm build --flavor debian-full failed"
+        echo "$output" | tail -20 | sed 's/^/    /'
+        return
+    fi
+
+    # Test: both flavor bases coexist
+    if [[ -f "$slim_base" && -f "$full_base" ]]; then
+        pass "slim and full base images coexist"
+    else
+        fail "base coexistence" "slim=$([[ -f "$slim_base" ]] && echo y || echo n) full=$([[ -f "$full_base" ]] && echo y || echo n)"
+    fi
+
+    # Test: list shows both bases
+    local list_output
+    list_output=$(bash "$CLAUDE_VM" list 2>&1) || true
+    if echo "$list_output" | grep -q "base-debian-slim.qcow2" && \
+       echo "$list_output" | grep -q "base-debian-full.qcow2"; then
+        pass "list shows both flavor bases"
+    else
+        fail "list shows bases" "$(echo "$list_output" | grep base || echo 'no base lines')"
+    fi
+
+    # Launch a project against the full flavor
+    export FLAVOR=debian-full
+    _e2e_launch "$FAKE_PROJECT_C"
+    unset FLAVOR
+
+    local hash_c snap_c
+    hash_c=$(echo -n "$FAKE_PROJECT_C" | sha256sum | cut -c1-12)
+    snap_c="$CLAUDE_VM_DIR/snapshots/${hash_c}.qcow2"
+
+    # Test: snapshot backs onto the full base
+    local backing
+    backing=$(qemu-img info -U --output=json "$snap_c" 2>/dev/null | jq -r '.["backing-filename"] // empty' 2>/dev/null)
+    if [[ "$(basename "$backing")" == "base-debian-full.qcow2" ]]; then
+        pass "full-flavor snapshot backs onto base-debian-full.qcow2"
+    else
+        fail "full snapshot backing" "got: $backing"
+    fi
+
+    # Test: build tools present in the full image
+    local missing_pkgs=()
+    local pkg
+    for pkg in build-essential cmake tmux strace wget; do
+        if ! _e2e_ssh "$FAKE_PROJECT_C" "dpkg -s $pkg" &>/dev/null; then
+            missing_pkgs+=("$pkg")
+        fi
+    done
+    if (( ${#missing_pkgs[@]} == 0 )); then
+        pass "full image includes build tools and utilities"
+    else
+        fail "full packages" "missing: ${missing_pkgs[*]}"
+    fi
+
+    # Test: gcc runs
+    if _e2e_ssh "$FAKE_PROJECT_C" "gcc --version && tmux -V" &>/dev/null; then
+        pass "gcc and tmux run in the full guest"
+    else
+        fail "gcc/tmux run" "execution failed"
+    fi
+
+    _e2e_cmd "$FAKE_PROJECT_C" stop &>/dev/null || true
+    FLAVOR=debian-full _e2e_cmd "$FAKE_PROJECT_C" destroy &>/dev/null || true
+}
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 main() {
@@ -599,6 +701,7 @@ main() {
     phase_rebase
     phase_reset
     phase_destroy
+    phase_full_flavor
 
     echo ""
     echo "=== Results: $TESTS_PASSED passed, $TESTS_FAILED failed, $TESTS_SKIPPED skipped, $TESTS_RUN total ==="

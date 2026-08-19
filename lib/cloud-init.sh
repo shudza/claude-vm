@@ -9,7 +9,7 @@ set -euo pipefail
 # Dispatches to flavor-specific sections for packages and runcmd
 generate_cloud_init_userdata() {
     local output_dir="$1"
-    local flavor="${FLAVOR:-debian}"
+    local flavor="${FLAVOR:-debian-slim}"
 
     # Ensure SSH keypair exists for VM access
     local key_dir="${CLAUDE_VM_DIR:-$HOME/.claude-vm}/keys"
@@ -27,12 +27,9 @@ generate_cloud_init_userdata() {
     local packages_block
     packages_block="$(_cloud_init_packages "$flavor")"
 
-    # Flavor-specific: runcmd for Node.js, gh, and cleanup
-    local nodejs_runcmd
-    nodejs_runcmd="$(_cloud_init_nodejs_runcmd "$flavor")"
-
-    local gh_runcmd
-    gh_runcmd="$(_cloud_init_gh_runcmd "$flavor")"
+    # Flavor-specific: package manager tuning (written before packages install)
+    local pkg_tuning_files
+    pkg_tuning_files="$(_cloud_init_pkg_tuning_files "$flavor")"
 
     local cleanup_runcmd
     cleanup_runcmd="$(_cloud_init_cleanup_runcmd "$flavor")"
@@ -64,6 +61,7 @@ users:
 $packages_block
 
 write_files:
+$pkg_tuning_files
   - path: /etc/ssh/sshd_config.d/claude-vm.conf
     content: |
       PermitRootLogin no
@@ -127,10 +125,6 @@ runcmd:
   - chown $VM_USER:$VM_USER /workspace
   # Fix ownership of deferred write_files
   - chown -R $VM_USER:$VM_USER /home/$VM_USER/.bashrc /home/$VM_USER/.ssh
-  # Install Node.js (flavor-specific)
-$nodejs_runcmd
-  # Install GitHub CLI (flavor-specific)
-$gh_runcmd
   # Install uv (Python package manager)
   - sudo -u $VM_USER bash -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
   # Install Claude Code (native installer, no npm needed)
@@ -164,28 +158,109 @@ USERDATA
 
 # ── Flavor-specific helpers ──────────────────────────────────────────────────
 
+# Emit the packages: block for a flavor. Everything installs in the single
+# cloud-init package transaction — nodejs/npm/gh come from the distro repos,
+# so no extra apt sources or index refreshes are needed. Slim is the base
+# set; full appends build tools and extra utilities.
 _cloud_init_packages() {
     local flavor="$1"
-    case "$flavor" in
-        debian)
+    local distro variant
+    distro="$(flavor_distro "$flavor")"
+    variant="$(flavor_variant "$flavor")"
+
+    case "$distro" in
+        debian|ubuntu)
             cat << 'PKG'
 packages:
-  # Core (Claude Code depends on these)
+  # Infrastructure (SSH access, config sync, installer downloads)
   - openssh-server
-  - git
+  - rsync
   - curl
+  - ca-certificates
+  # Core (Claude Code depends on these; less = git's pager with recommends off)
+  - git
   - jq
   - ripgrep
-  # Runtimes
+  - less
+  - zip
+  - unzip
+  # Runtimes + GitHub CLI (distro repos)
+  - gh
+  - nodejs
+  - npm
   - python3
   - python3-pip
   - python3-venv
+PKG
+            ;;
+        archlinux)
+            cat << 'PKG'
+packages:
+  # Infrastructure (SSH access, config sync, installer downloads)
+  - openssh
+  - rsync
+  - curl
+  - ca-certificates
+  # Core (Claude Code depends on these; less = git's pager)
+  - git
+  - jq
+  - ripgrep
+  - less
+  - zip
+  - unzip
+  # Runtimes + GitHub CLI (distro repos)
+  - github-cli
+  - nodejs
+  - npm
+  - python
+  - python-pip
+PKG
+            ;;
+        fedora)
+            cat << 'PKG'
+packages:
+  # Infrastructure (SSH access, config sync, installer downloads)
+  - openssh-server
+  - rsync
+  - curl
+  - ca-certificates
+  # Core (Claude Code depends on these; less = git's pager with weak deps off)
+  - git
+  - jq
+  - ripgrep
+  - less
+  - zip
+  - unzip
+  # Runtimes + GitHub CLI (distro repos; npm resolves to nodejs-npm)
+  - gh
+  - nodejs
+  - npm
+  - python3
+  - python3-pip
+PKG
+            ;;
+        *)
+            echo "ERROR: unknown flavor '$flavor' in _cloud_init_packages" >&2
+            return 1
+            ;;
+    esac
+
+    [[ "$variant" == "full" ]] || return 0
+
+    case "$distro" in
+        debian)
+            cat << 'PKG'
+  # Build tools (native npm modules, compilation)
+  - build-essential
+  - cmake
   # Tools Claude reaches for in bash
   - xxd
   - file
   - sqlite3
   - bc
+  - strace
   - lsof
+  - dnsutils
   - netcat-openbsd
   - iputils-ping
   - socat
@@ -194,31 +269,23 @@ packages:
   - tmux
   - vim-tiny
   - tree
-  - unzip
-  - rsync
-  - ca-certificates
+  - wget
   - gnupg
 PKG
             ;;
         ubuntu)
             cat << 'PKG'
-packages:
-  # Core (Claude Code depends on these)
-  - openssh-server
-  - git
-  - curl
-  - jq
-  - ripgrep
-  # Runtimes
-  - python3
-  - python3-pip
-  - python3-venv
+  # Build tools (native npm modules, compilation)
+  - build-essential
+  - cmake
   # Tools Claude reaches for in bash
   - xxd
   - file
   - sqlite3
   - bc
+  - strace
   - lsof
+  - dnsutils
   - netcat-openbsd
   - iputils-ping
   - socat
@@ -227,30 +294,23 @@ packages:
   - tmux
   - vim
   - tree
-  - unzip
-  - rsync
-  - ca-certificates
+  - wget
   - gnupg
 PKG
             ;;
         archlinux)
             cat << 'PKG'
-packages:
-  # Core (Claude Code depends on these)
-  - openssh
-  - git
-  - curl
-  - jq
-  - ripgrep
-  # Runtimes
-  - python
-  - python-pip
+  # Build tools (native npm modules, compilation)
+  - base-devel
+  - cmake
   # Tools Claude reaches for in bash
   - vim
   - file
   - sqlite
   - bc
+  - strace
   - lsof
+  - bind-tools
   - openbsd-netcat
   - iputils
   - socat
@@ -258,30 +318,25 @@ packages:
   # Utilities
   - tmux
   - tree
-  - unzip
-  - rsync
-  - ca-certificates
+  - wget
   - gnupg
 PKG
             ;;
         fedora)
             cat << 'PKG'
-packages:
-  # Core (Claude Code depends on these)
-  - openssh-server
-  - git
-  - curl
-  - jq
-  - ripgrep
-  # Runtimes
-  - python3
-  - python3-pip
+  # Build tools (native npm modules, compilation)
+  - gcc
+  - gcc-c++
+  - make
+  - cmake
   # Tools Claude reaches for in bash
   - vim-minimal
   - file
   - sqlite
   - bc
+  - strace
   - lsof
+  - bind-utils
   - nmap-ncat
   - iputils
   - socat
@@ -289,67 +344,58 @@ packages:
   # Utilities
   - tmux
   - tree
-  - unzip
-  - rsync
-  - ca-certificates
+  - wget
   - gnupg2
 PKG
             ;;
     esac
 }
 
-_cloud_init_nodejs_runcmd() {
+# Package manager tuning written before the package transaction runs
+# (cloud-init processes write_files in the init stage, packages in the config
+# stage, so these are active for the whole install). Skips docs/man pages and
+# recommended/weak dependencies to cut download and install time.
+_cloud_init_pkg_tuning_files() {
     local flavor="$1"
-    case "$flavor" in
+    case "$(flavor_distro "$flavor")" in
         debian|ubuntu)
-            cat << 'CMD'
-  - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-  - apt-get install -y nodejs
-CMD
+            cat << 'TUNING'
+  - path: /etc/dpkg/dpkg.cfg.d/claude-vm
+    content: |
+      force-unsafe-io
+      path-exclude=/usr/share/man/*
+      path-exclude=/usr/share/doc/*
+      path-include=/usr/share/doc/*/copyright
+    permissions: '0644'
+  - path: /etc/apt/apt.conf.d/99claude-vm
+    content: |
+      APT::Install-Recommends "false";
+      APT::Install-Suggests "false";
+      Acquire::Languages "none";
+    permissions: '0644'
+TUNING
             ;;
         archlinux)
-            cat << 'CMD'
-  - pacman -Sy --noconfirm nodejs npm
-CMD
             ;;
         fedora)
-            cat << 'CMD'
-  - dnf install -y nodejs npm
-CMD
+            cat << 'TUNING'
+  - path: /etc/dnf/dnf.conf
+    content: |
+      install_weak_deps=False
+      tsflags=nodocs
+    append: true
+TUNING
             ;;
-    esac
-}
-
-_cloud_init_gh_runcmd() {
-    local flavor="$1"
-    case "$flavor" in
-        debian|ubuntu)
-            cat << 'CMD'
-  # GitHub CLI (used by Claude Code for PR/issue operations)
-  - mkdir -p -m 755 /etc/apt/keyrings
-  - curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg
-  - chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
-  - echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
-  - apt-get update
-  - apt-get install -y gh
-CMD
-            ;;
-        archlinux)
-            cat << 'CMD'
-  - pacman -Sy --noconfirm github-cli
-CMD
-            ;;
-        fedora)
-            cat << 'CMD'
-  - dnf install -y gh
-CMD
+        *)
+            echo "ERROR: unknown flavor '$flavor' in _cloud_init_pkg_tuning_files" >&2
+            return 1
             ;;
     esac
 }
 
 _cloud_init_cleanup_runcmd() {
     local flavor="$1"
-    case "$flavor" in
+    case "$(flavor_distro "$flavor")" in
         debian)
             cat << 'CMD'
   # Disable background services that bloat snapshots and waste CPU
@@ -395,16 +441,24 @@ CMD
   - journalctl --vacuum-size=8M || true
 CMD
             ;;
+        *)
+            echo "ERROR: unknown flavor '$flavor' in _cloud_init_cleanup_runcmd" >&2
+            return 1
+            ;;
     esac
 }
 
 _cloud_init_ssh_service() {
     local flavor="$1"
-    case "$flavor" in
+    case "$(flavor_distro "$flavor")" in
         debian) echo "ssh" ;;
         ubuntu) echo "ssh" ;;
         archlinux) echo "sshd" ;;
         fedora) echo "sshd" ;;
+        *)
+            echo "ERROR: unknown flavor '$flavor' in _cloud_init_ssh_service" >&2
+            return 1
+            ;;
     esac
 }
 

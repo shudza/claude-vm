@@ -254,6 +254,75 @@ test_verify_snapshot() {
 }
 
 # ──────────────────────────────────────────────
+# Test 6b: Verification accepts any claude-vm base as backing
+# ──────────────────────────────────────────────
+test_verify_snapshot_backing_variants() {
+    echo "Test 6b: Verification accepts legacy and other-flavor backings"
+
+    setup_base_image
+
+    # Legacy pre-flavor base.qcow2 backing still verifies
+    local legacy_base="$BASE_IMAGES_DIR/base.qcow2"
+    qemu-img create -f qcow2 "$legacy_base" 1G &>/dev/null
+    local proj_legacy="$TEST_DIR/fake-project-legacy"
+    mkdir -p "$proj_legacy"
+    local snap_legacy
+    snap_legacy="$(project_snapshot_path "$proj_legacy")"
+    qemu-img create -f qcow2 -b "$legacy_base" -F qcow2 "$snap_legacy" &>/dev/null
+
+    if verify_snapshot "$proj_legacy" >/dev/null 2>&1; then
+        pass "Verify accepts legacy base.qcow2 backing"
+    else
+        fail "Verify rejected legacy base.qcow2 backing"
+    fi
+
+    # Backing of a different flavor than the configured one still verifies
+    local other_base="$BASE_IMAGES_DIR/base-fedora-slim.qcow2"
+    qemu-img create -f qcow2 "$other_base" 1G &>/dev/null
+    local proj_other="$TEST_DIR/fake-project-otherflavor"
+    mkdir -p "$proj_other"
+    local snap_other
+    snap_other="$(project_snapshot_path "$proj_other")"
+    qemu-img create -f qcow2 -b "$other_base" -F qcow2 "$snap_other" &>/dev/null
+
+    if verify_snapshot "$proj_other" >/dev/null 2>&1; then
+        pass "Verify accepts a different flavor's base as backing"
+    else
+        fail "Verify rejected base-fedora-slim.qcow2 backing"
+    fi
+
+    # Backing outside BASE_IMAGES_DIR is rejected
+    local foreign_base="$TEST_DIR/foreign.qcow2"
+    qemu-img create -f qcow2 "$foreign_base" 1G &>/dev/null
+    local proj_foreign="$TEST_DIR/fake-project-foreign"
+    mkdir -p "$proj_foreign"
+    local snap_foreign
+    snap_foreign="$(project_snapshot_path "$proj_foreign")"
+    qemu-img create -f qcow2 -b "$foreign_base" -F qcow2 "$snap_foreign" &>/dev/null
+
+    if ! verify_snapshot "$proj_foreign" >/dev/null 2>&1; then
+        pass "Verify rejects backing outside the base images dir"
+    else
+        fail "Verify accepted a foreign backing file"
+    fi
+
+    # Backing named like a base but with an unknown flavor is rejected
+    local bogus_base="$BASE_IMAGES_DIR/base-bogus-thing.qcow2"
+    qemu-img create -f qcow2 "$bogus_base" 1G &>/dev/null
+    local proj_bogus="$TEST_DIR/fake-project-bogusflavor"
+    mkdir -p "$proj_bogus"
+    local snap_bogus
+    snap_bogus="$(project_snapshot_path "$proj_bogus")"
+    qemu-img create -f qcow2 -b "$bogus_base" -F qcow2 "$snap_bogus" &>/dev/null
+
+    if ! verify_snapshot "$proj_bogus" >/dev/null 2>&1; then
+        pass "Verify rejects unknown-flavor base names"
+    else
+        fail "Verify accepted base-bogus-thing.qcow2 backing"
+    fi
+}
+
+# ──────────────────────────────────────────────
 # Test 7: Snapshot initial size is small (COW overhead only)
 # ──────────────────────────────────────────────
 test_snapshot_cow_size() {
@@ -368,6 +437,8 @@ echo ""
 test_project_isolation
 echo ""
 test_verify_snapshot
+echo ""
+test_verify_snapshot_backing_variants
 echo ""
 test_snapshot_cow_size
 echo ""

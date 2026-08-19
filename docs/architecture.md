@@ -19,17 +19,18 @@ Host (Linux)
 
 ## Snapshot Strategy
 
-**Base image** (`~/.claude-vm/base/base.qcow2`): Golden image with OS + Claude Code + dev tools. Built once via cloud-init provisioning, updated occasionally with `claude-vm build --force` or `claude-vm rebase`.
+**Base images** (`~/.claude-vm/base/base-<flavor>.qcow2`): Golden images with OS + Claude Code + dev tools, one per flavor (e.g. `base-debian-slim.qcow2`, `base-fedora-full.qcow2`), so multiple flavors coexist. Built once via cloud-init provisioning, updated occasionally with `claude-vm build --force` or `claude-vm rebase`. Installs from before the slim/full split used a single `base.qcow2`; snapshots backed by it keep working, and `claude-vm rebase` migrates them to flavor-keyed bases.
 
-**Linked snapshots** (`~/.claude-vm/snapshots/<hash>.qcow2`): QCOW2 files backed by the base image. Copy-on-write means only the delta from base consumes disk. Each project directory gets its own snapshot identified by a 12-char SHA-256 hash of the absolute path.
+**Linked snapshots** (`~/.claude-vm/snapshots/<hash>.qcow2`): QCOW2 files backed by a base image. Copy-on-write means only the delta from base consumes disk. Each project directory gets its own snapshot identified by a 12-char SHA-256 hash of the absolute path; the snapshot's embedded backing reference records which flavor's base it was created from.
 
 **Sidecar metadata** (`~/.claude-vm/snapshots/<hash>.project`): Stores the project directory path so `claude-vm list` can display human-readable names.
 
 ```
-base.qcow2 (golden image, ~1.5GB)
+base-debian-slim.qcow2 (golden image, ~1GB)
   <- project-abc123.qcow2 (COW delta, starts at ~200KB)
   <- project-def456.qcow2 (COW delta)
-  <- ...
+base-debian-full.qcow2 (golden image, ~1.5GB)
+  <- project-789abc.qcow2 (COW delta)
 ```
 
 ## Launch Flow
@@ -67,12 +68,12 @@ with the log path and a tail of recent errors.
 
 ## Build/Provisioning Flow
 
-1. Download cloud image (Debian 12 or Ubuntu 24.04 depending on flavor)
+1. Download cloud image (Debian 13, Ubuntu 24.04, Arch, or Fedora 41 depending on flavor)
 2. Convert to QCOW2 and resize to 20GB
 3. Generate cloud-init ISO with user-data, meta-data, and network-config
 4. Boot VM with cloud-init attached (headless, auto-poweroff when done)
-5. Cloud-init provisions: user account, SSH, dev tools, Node.js, Claude Code, virtiofs mounts
-6. Move provisioned image to final base image location
+5. Cloud-init provisions: user account, SSH, the flavor's package set (nodejs/npm/gh from the distro repos in a single package transaction), uv, Claude Code, virtiofs mounts
+6. Move provisioned image to its flavor-keyed base location (`base-<flavor>.qcow2`)
 
 ## Rebase Flow
 
@@ -131,7 +132,7 @@ Only **user-scoped** MCP servers carry over automatically. For a server you want
     id_ed25519             SSH keypair for VM access
     id_ed25519.pub
   base/
-    base.qcow2             Provisioned golden image
+    base-<flavor>.qcow2    Provisioned golden image (one per flavor)
     <cloud-image>          Downloaded cloud image (cached)
   snapshots/
     <hash>.qcow2           Per-project linked snapshot

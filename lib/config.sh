@@ -12,61 +12,95 @@ CLAUDE_VM_CONFIG="${CLAUDE_VM_CONFIG:-$CLAUDE_VM_DIR/config}"
 DEFAULT_RAM="4G"
 DEFAULT_CPUS="2"
 DEFAULT_SSH_PORT_BASE="10022"
-DEFAULT_FLAVOR="debian"
+DEFAULT_FLAVOR="debian-slim"
 DEFAULT_VM_USER="$USER"
 DEFAULT_FORWARD_PORTS=""
 DEFAULT_CLAUDE_ARGS="--dangerously-skip-permissions"
 DEFAULT_REBASE_BACKUP_PATHS=""
 
 # ── Flavor registry ──────────────────────────────────────────────────────────
-# Each flavor defines: image URL, image filename, package manager family
+# Flavors are <distro>-<variant> where variant is "slim" (default tool set) or
+# "full" (slim + build tools and extra utilities). Bare distro names alias to
+# <distro>-full for backward compatibility. The registry arrays are keyed by
+# distro — slim and full share the same upstream cloud image.
 # Cloud-init userdata generation is dispatched by flavor in cloud-init.sh
 
-declare -A FLAVOR_IMAGE_URL=(
+declare -gA FLAVOR_IMAGE_URL=(
     [debian]="https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2"
     [ubuntu]="https://cloud-images.ubuntu.com/minimal/releases/noble/release/ubuntu-24.04-minimal-cloudimg-amd64.img"
     [archlinux]="https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2"
     [fedora]="https://download.fedoraproject.org/pub/fedora/linux/releases/41/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-41-1.4.x86_64.qcow2"
 )
 
-declare -A FLAVOR_IMAGE_NAME=(
+declare -gA FLAVOR_IMAGE_NAME=(
     [debian]="debian-13-genericcloud-amd64.qcow2"
     [ubuntu]="ubuntu-24.04-minimal-cloudimg-amd64.img"
     [archlinux]="Arch-Linux-x86_64-cloudimg.qcow2"
     [fedora]="Fedora-Cloud-Base-Generic-41-1.4.x86_64.qcow2"
 )
 
-declare -A FLAVOR_PKG_FAMILY=(
-    [debian]="apt"
-    [ubuntu]="apt"
-    [archlinux]="pacman"
-    [fedora]="dnf"
-)
-
 # Upstream checksum file URLs (fetched at download time to verify image integrity)
 # Debian publishes SHA512SUMS, Ubuntu publishes SHA256SUMS
-declare -A FLAVOR_CHECKSUM_URL=(
+declare -gA FLAVOR_CHECKSUM_URL=(
     [debian]="https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS"
     [ubuntu]="https://cloud-images.ubuntu.com/minimal/releases/noble/release/SHA256SUMS"
     [archlinux]="https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2.SHA256"
     [fedora]="https://download.fedoraproject.org/pub/fedora/linux/releases/41/Cloud/x86_64/images/Fedora-Cloud-41-1.4-x86_64-CHECKSUM"
 )
 
-declare -A FLAVOR_CHECKSUM_TYPE=(
+declare -gA FLAVOR_CHECKSUM_TYPE=(
     [debian]="sha512"
     [ubuntu]="sha256"
     [archlinux]="sha256"
     [fedora]="sha256"
 )
 
-# List valid flavor names
-valid_flavors() {
-    echo "${!FLAVOR_IMAGE_URL[@]}" | tr ' ' '\n' | sort
+# Normalize a flavor name to <distro>-<variant> form.
+# Bare distro names alias to <distro>-full. Prints the normalized name;
+# returns non-zero for unknown flavors.
+normalize_flavor() {
+    local name="$1"
+    case "$name" in
+        *-slim|*-full)
+            [[ -n "${FLAVOR_IMAGE_URL[${name%-*}]+x}" ]] || return 1
+            echo "$name"
+            ;;
+        *)
+            [[ -n "${FLAVOR_IMAGE_URL[$name]+x}" ]] || return 1
+            echo "${name}-full"
+            ;;
+    esac
 }
 
-# Check if a flavor name is valid
+# Distro part of a flavor name (registry key)
+flavor_distro() {
+    case "$1" in
+        *-slim|*-full) echo "${1%-*}" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+# Variant part of a flavor name (bare names are full)
+flavor_variant() {
+    case "$1" in
+        *-slim) echo "slim" ;;
+        *) echo "full" ;;
+    esac
+}
+
+# List valid flavor names (normalized forms)
+valid_flavors() {
+    local distro variant
+    for distro in $(echo "${!FLAVOR_IMAGE_URL[@]}" | tr ' ' '\n' | sort); do
+        for variant in slim full; do
+            echo "${distro}-${variant}"
+        done
+    done
+}
+
+# Check if a flavor name is valid (bare distro aliases included)
 is_valid_flavor() {
-    [[ -n "${FLAVOR_IMAGE_URL[$1]+x}" ]]
+    normalize_flavor "$1" >/dev/null 2>&1
 }
 
 # Derived paths
@@ -117,16 +151,18 @@ load_config() {
     [[ -n "$_env_claude_args" ]] && CLAUDE_ARGS="$_env_claude_args"
     [[ -n "$_env_rebase_backup_paths" ]] && REBASE_BACKUP_PATHS="$_env_rebase_backup_paths"
 
-    # Derive image URL/name from flavor (explicit overrides still win)
-    if is_valid_flavor "$FLAVOR"; then
-        BASE_IMAGE_URL="${_env_image_url:-${FLAVOR_IMAGE_URL[$FLAVOR]}}"
-        BASE_IMAGE_NAME="${_env_image_name:-${FLAVOR_IMAGE_NAME[$FLAVOR]}}"
+    # Normalize flavor and derive image URL/name from its distro
+    # (explicit overrides still win)
+    local _normalized _distro
+    if _normalized="$(normalize_flavor "$FLAVOR")"; then
+        FLAVOR="$_normalized"
     else
-        echo "WARNING: Unknown flavor '$FLAVOR', falling back to debian" >&2
-        FLAVOR="debian"
-        BASE_IMAGE_URL="${_env_image_url:-${FLAVOR_IMAGE_URL[debian]}}"
-        BASE_IMAGE_NAME="${_env_image_name:-${FLAVOR_IMAGE_NAME[debian]}}"
+        echo "WARNING: Unknown flavor '$FLAVOR', falling back to debian-slim" >&2
+        FLAVOR="debian-slim"
     fi
+    _distro="$(flavor_distro "$FLAVOR")"
+    BASE_IMAGE_URL="${_env_image_url:-${FLAVOR_IMAGE_URL[$_distro]}}"
+    BASE_IMAGE_NAME="${_env_image_name:-${FLAVOR_IMAGE_NAME[$_distro]}}"
 
     return 0
 }
@@ -160,6 +196,7 @@ show_config() {
 set_config_value() {
     local key="$1"
     local value="$2"
+    local normalized
 
     # Validate key is a known config option
     case "$key" in
@@ -174,11 +211,13 @@ set_config_value() {
     # Validate resource values
     case "$key" in
         FLAVOR)
-            if ! is_valid_flavor "$value"; then
+            if ! normalized="$(normalize_flavor "$value")"; then
                 echo "Unknown flavor: $value" >&2
                 echo "Valid flavors: $(valid_flavors | tr '\n' ' ')" >&2
+                echo "Bare distro names (debian, ubuntu, ...) alias to the -full variant." >&2
                 return 1
             fi
+            value="$normalized"
             ;;
         VM_RAM)
             if ! [[ "$value" =~ ^[0-9]+[GMgm]$ ]]; then
@@ -275,9 +314,10 @@ project_backup_dir() {
     echo "$BACKUPS_DIR/$hash"
 }
 
-# Get the base image path (the provisioned golden image)
+# Get the base image path for the current FLAVOR (the provisioned golden
+# image). Each flavor gets its own base so multiple flavors can coexist.
 base_image_path() {
-    echo "$BASE_IMAGES_DIR/base.qcow2"
+    echo "$BASE_IMAGES_DIR/base-${FLAVOR:-$DEFAULT_FLAVOR}.qcow2"
 }
 
 # Get the downloaded cloud image path (the raw download)

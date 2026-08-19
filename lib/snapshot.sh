@@ -5,7 +5,8 @@
 # image. Snapshots use copy-on-write (COW), so only the delta from the base
 # image consumes disk space.
 #
-# Backing chain: base.qcow2 ← <project-hash>.qcow2
+# Backing chain: base-<flavor>.qcow2 ← <project-hash>.qcow2
+# (legacy snapshots may still be backed by pre-flavor base.qcow2)
 #
 # Functions:
 #   create_project_snapshot  — Create a linked snapshot for a project
@@ -79,17 +80,19 @@ create_project_snapshot() {
 }
 
 # Verify a project snapshot's integrity and backing chain
-# Checks: file exists, qcow2 format valid, backing file resolves to base image
+# Checks: file exists, qcow2 format valid, backing file is a claude-vm base
+# image. The snapshot carries its own backing reference, which may be any
+# flavor's base (or the legacy pre-flavor base.qcow2) — not necessarily the
+# base of the currently configured FLAVOR.
 # Args: $1 = project directory (defaults to $PWD)
 # Returns: 0 if valid, 1 if invalid
 verify_snapshot() {
     local project_dir="${1:-$PWD}"
-    local snap_path base_img
+    local snap_path
 
     load_config
 
     snap_path="$(project_snapshot_path "$project_dir")"
-    base_img="$(base_image_path)"
 
     if [[ ! -f "$snap_path" ]]; then
         echo "ERROR: Snapshot not found: $snap_path" >&2
@@ -102,7 +105,7 @@ verify_snapshot() {
         return 1
     fi
 
-    # Verify backing file points to the expected base image
+    # Verify backing file points at a claude-vm base image
     local actual_backing
     actual_backing="$(qemu-img info --output=json "$snap_path" | \
         jq -r '.["backing-filename"] // empty' 2>/dev/null || true)"
@@ -113,26 +116,36 @@ verify_snapshot() {
     fi
 
     # Resolve to absolute paths for comparison
-    local resolved_backing resolved_base
+    local resolved_backing resolved_base_dir backing_name
     resolved_backing="$(realpath -m "$actual_backing" 2>/dev/null || echo "$actual_backing")"
-    resolved_base="$(realpath -m "$base_img" 2>/dev/null || echo "$base_img")"
+    resolved_base_dir="$(realpath -m "$BASE_IMAGES_DIR" 2>/dev/null || echo "$BASE_IMAGES_DIR")"
+    backing_name="$(basename "$resolved_backing")"
 
-    if [[ "$resolved_backing" != "$resolved_base" ]]; then
+    local backing_ok=false
+    if [[ "$(dirname "$resolved_backing")" == "$resolved_base_dir" ]]; then
+        if [[ "$backing_name" == "base.qcow2" ]]; then
+            backing_ok=true
+        elif [[ "$backing_name" =~ ^base-(.+)\.qcow2$ ]] && is_valid_flavor "${BASH_REMATCH[1]}"; then
+            backing_ok=true
+        fi
+    fi
+
+    if [[ "$backing_ok" != true ]]; then
         echo "WARNING: Snapshot backing file mismatch" >&2
-        echo "  Expected: $resolved_base" >&2
+        echo "  Expected: a claude-vm base image in $resolved_base_dir" >&2
         echo "  Actual: $resolved_backing" >&2
         return 1
     fi
 
     # Verify the backing file itself exists
-    if [[ ! -f "$resolved_base" ]]; then
-        echo "ERROR: Backing file (base image) is missing: $resolved_base" >&2
+    if [[ ! -f "$resolved_backing" ]]; then
+        echo "ERROR: Backing file (base image) is missing: $resolved_backing" >&2
         echo "This snapshot is orphaned. Reset with 'claude-vm reset'." >&2
         return 1
     fi
 
     echo "  Snapshot verified: $snap_path"
-    echo "  Backing: $resolved_base"
+    echo "  Backing: $resolved_backing"
     return 0
 }
 

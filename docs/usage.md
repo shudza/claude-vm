@@ -28,15 +28,17 @@ claude-vm -- --model sonnet         # Pass extra args to claude
 Build or rebuild the base image.
 
 ```bash
-claude-vm build                   # Build base image (skips if exists)
-claude-vm build --force           # Rebuild from scratch
-claude-vm build --flavor ubuntu   # Build with a specific flavor
+claude-vm build                        # Build base image (skips if exists)
+claude-vm build --force                # Rebuild from scratch
+claude-vm build --flavor ubuntu-slim   # Build with a specific flavor
 ```
 
 | Flag | Description |
 |-|-|
 | `--force`, `--from-scratch` | Delete existing base image and rebuild |
-| `--flavor NAME` | Override flavor for this build (debian, ubuntu, archlinux, fedora) |
+| `--flavor NAME` | Override flavor for this build (`<distro>-slim` or `<distro>-full`; bare distro names alias to `-full`) |
+
+Each flavor builds into its own base image (`~/.claude-vm/base/base-<flavor>.qcow2`), so building a second flavor doesn't replace the first.
 
 The downloaded cloud image is verified against the upstream checksum file (SHA512 for Debian, SHA256 for the others) before provisioning. On mismatch the image is deleted and the build fails. If the checksum file can't be fetched, verification is skipped with a warning.
 
@@ -149,8 +151,9 @@ Project snapshots:
   /home/user/other-project
     789abc012def  4.2M  [stopped]
 
-Base image:
-  1.5G  ~/.claude-vm/base/base.qcow2
+Base images:
+  1.1G  ~/.claude-vm/base/base-debian-slim.qcow2
+  1.6G  ~/.claude-vm/base/base-debian-full.qcow2
 ```
 
 ### `claude-vm status`
@@ -171,7 +174,7 @@ Snapshot: ~/.claude-vm/snapshots/abc123def456.qcow2 (196K)
 Status: RUNNING (PID: 12345, SSH port: 10022)
 Claude Code instances: 3
 
-Base image: 1.5G
+Base image: 1.1G  base-debian-slim.qcow2
 ```
 
 ### `claude-vm show`
@@ -222,7 +225,7 @@ Location: `~/.claude-vm/config` (sourced as bash)
 
 ```bash
 # Example ~/.claude-vm/config
-FLAVOR="debian"
+FLAVOR="debian-slim"
 VM_RAM="8G"
 VM_CPUS="4"
 SSH_PORT_BASE="10022"
@@ -233,7 +236,7 @@ CLAUDE_ARGS="--dangerously-skip-permissions --model sonnet"
 
 | Key | Default | Validation | Description |
 |-|-|-|-|
-| `FLAVOR` | `debian` | debian, ubuntu, archlinux, fedora | Base image flavor |
+| `FLAVOR` | `debian-slim` | `<distro>-slim`/`<distro>-full` for debian, ubuntu, archlinux, fedora (bare names alias to `-full`) | Base image flavor |
 | `VM_USER` | `$USER` | Username | Guest username (also used for SSH login) |
 | `VM_RAM` | `4G` | `\d+[GMgm]` | RAM allocation |
 | `VM_CPUS` | `2` | Positive integer | CPU cores |
@@ -271,26 +274,32 @@ defaults < config file < environment variables
 
 ## Flavors
 
+Flavors are named `<distro>-<variant>`. The **slim** variant carries the everyday tool set (git, Node.js, Python, gh) and builds fast; **full** adds compilers and extra utilities. Bare distro names (`debian`, `ubuntu`, `archlinux`, `fedora`) alias to the `-full` variant for backward compatibility and are stored normalized.
+
 | Flavor | Image | Package manager | Notes |
 |-|-|-|-|
-| `debian` (default) | Debian 13 (trixie) genericcloud | apt | Minimal, no snapd |
-| `ubuntu` | Ubuntu 24.04 minimal | apt | snapd auto-removed during provisioning |
-| `archlinux` | Arch Linux cloud image | pacman | Rolling release |
-| `fedora` | Fedora 41 Cloud Base | dnf | |
+| `debian-slim` (default) | Debian 13 (trixie) genericcloud | apt | Minimal, no snapd |
+| `debian-full` | Debian 13 (trixie) genericcloud | apt | Adds build-essential, cmake, tmux, ... |
+| `ubuntu-slim` / `ubuntu-full` | Ubuntu 24.04 minimal | apt | snapd auto-removed during provisioning |
+| `archlinux-slim` / `archlinux-full` | Arch Linux cloud image | pacman | Rolling release |
+| `fedora-slim` / `fedora-full` | Fedora 41 Cloud Base | dnf | |
 
-All flavors install the same core tool set; package names differ per distro (e.g. `netcat-openbsd` vs `openbsd-netcat`, `vim-tiny` vs `vim`).
+All flavors of a variant install the same tool set; package names differ per distro (e.g. `build-essential` vs `base-devel`, `gh` vs `github-cli`). Each flavor keeps its own base image (`base-<flavor>.qcow2`), so multiple flavors coexist and different projects can use different flavors.
 
 Set the flavor:
 
 ```bash
 # Via config
-claude-vm config set FLAVOR archlinux
+claude-vm config set FLAVOR archlinux-slim
 
 # Via environment
-FLAVOR=ubuntu claude-vm build
+FLAVOR=ubuntu-slim claude-vm build
 
 # Via flag (build only)
-claude-vm build --flavor fedora
+claude-vm build --flavor fedora-full
+
+# Bare names still work and mean the full variant
+claude-vm build --flavor debian    # == debian-full
 ```
 
 ## Multiple Instances
@@ -312,20 +321,23 @@ Each invocation detects the running VM and attaches a new Claude Code session vi
 
 ## Pre-installed Tools
 
-The base image includes tools Claude Code commonly uses:
+Everything comes from the distro's own repositories and installs in one cloud-init package transaction (no NodeSource or cli.github.com apt repos).
 
-**Core:** git, curl, jq, ripgrep (rg), gh (GitHub CLI)
+**Slim** (every flavor):
 
-**Runtimes:** Node.js 22, Python 3, pip, venv, uv (Python package manager)
+**Core:** git, curl, jq, ripgrep (rg), less, zip/unzip, gh (GitHub CLI), rsync
 
-**Debugging:** lsof, socat, netcat
+**Runtimes:** Node.js + npm (distro version), Python 3, pip, venv, uv (Python package manager), Claude Code
 
-**Utilities:** tmux, vim/vim-tiny, tree, xxd, file, sqlite3, bc, ping, rsync, unzip, patch
+**Full** adds:
 
-Claude Code also has full `sudo` access (NOPASSWD) to install additional packages at runtime.
-Compilers and build tools (gcc, make, cmake, …) are intentionally not pre-installed —
-they add ~100MB of downloads to the base image build and are only needed when a project
-compiles native extensions; Claude installs them on demand.
+**Build:** build-essential/base-devel/gcc + g++ + make (per distro), cmake
+
+**Debugging:** strace, lsof, socat, netcat, dig
+
+**Utilities:** tmux, vim/vim-tiny, tree, xxd, file, sqlite3, bc, ping, patch, wget, gnupg
+
+Node.js versions follow the distro: 20.x on Debian 13, 18.x on Ubuntu 24.04, current on Arch and Fedora. Claude Code also has full `sudo` access (NOPASSWD), so anything missing — including a newer Node from NodeSource or nvm — can be installed at runtime.
 
 ## Logs
 
@@ -394,7 +406,7 @@ FORWARD_PORTS="8080,3000" claude-vm
 VM_RAM=16G VM_CPUS=8 claude-vm
 
 # Build Ubuntu flavor
-claude-vm build --flavor ubuntu
+claude-vm build --flavor ubuntu-slim
 
 # Check what's running
 claude-vm status

@@ -317,7 +317,7 @@ launch_vm() {
         echo ""
         echo "  Project: $project_dir"
         if [[ ! -f "$base_img" ]]; then
-            echo "  Base image will be built first (~90s on first ever run)."
+            echo "  Base image ($FLAVOR) will be built first (about a minute, plus the image download on the first ever run)."
         fi
         echo ""
         read -rp "  Continue? [Y/n] " confirm
@@ -332,8 +332,9 @@ launch_vm() {
     mkdir -p "$run_dir"
     ui_init "$run_dir/launch.log"
 
-    # Build base image if needed
-    if [[ ! -f "$base_img" ]]; then
+    # Build base image only when a new snapshot needs it — existing snapshots
+    # carry their own backing reference, which may be a different flavor's base
+    if [[ ! -f "$snap_path" && ! -f "$base_img" ]]; then
         source "$SCRIPT_DIR/build.sh"
         ui_phase "Building base image" build_base_image
     fi
@@ -545,13 +546,17 @@ _dump_boot_diagnostics() {
             printf 'qemu pid:   (no pidfile — qemu never started?)\n'
         fi
 
-        if [[ -f "$(base_image_path)" ]]; then
-            printf 'base image: %s\n' "$(base_image_path)"
-            qemu-img check "$(base_image_path)" 2>&1 | head -1 | sed 's/^/base check: /'
-        fi
-
         if [[ -f "$snap_path" ]]; then
             printf 'snapshot:   %s (%s)\n' "$snap_path" "$(du -h "$snap_path" 2>/dev/null | cut -f1)"
+            local backing
+            backing="$(qemu-img info --output=json "$snap_path" 2>/dev/null | \
+                jq -r '.["backing-filename"] // empty' 2>/dev/null || true)"
+            if [[ -n "$backing" ]]; then
+                printf 'backing:    %s\n' "$backing"
+                qemu-img check "$backing" 2>&1 | head -1 | sed 's/^/base check: /'
+            else
+                printf 'backing:    (none — not a linked snapshot?)\n'
+            fi
         fi
 
         printf '\n──── guest serial log (tail 80) ────\n'
