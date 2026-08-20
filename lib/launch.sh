@@ -54,12 +54,21 @@ _guest_project_dir_name() {
 # CLAUDE_CONFIG_DIR is set to its default location because Claude Code only
 # honors CLAUDE_CODE_PROJECT_DIR_NAME when a config dir is explicitly set
 # (verified against the 2.1.236 binary).
+#
+# The two guarded commands after ~/.env migrate VMs created before
+# CLAUDE_CONFIG_DIR was exported, on their next connect: with a config dir
+# set, Claude Code reads the global json from ~/.claude/.claude.json and
+# transcripts from ~/.claude/projects/$CLAUDE_CODE_PROJECT_DIR_NAME, so
+# without this an existing VM re-runs onboarding and hides its previous
+# conversations. Runs after ~/.env so an overridden (or emptied) name is
+# respected; both guards make it a one-time, idempotent no-op afterwards.
+# The mv never merges — if both dirs exist, -workspace is left untouched.
 # Args: $1 = project directory
 _guest_env_prefix() {
     local project_dir="$1"
     local dir_name
     dir_name="$(_guest_project_dir_name "$project_dir")"
-    echo "export PATH=\"\$HOME/.local/bin:\$PATH\"; export COLORTERM=truecolor; export CLAUDE_CONFIG_DIR=\"\$HOME/.claude\"; export CLAUDE_CODE_PROJECT_DIR_NAME=\"$dir_name\"; cd /workspace 2>/dev/null; [ -f ~/.env ] && . ~/.env;"
+    echo "export PATH=\"\$HOME/.local/bin:\$PATH\"; export COLORTERM=truecolor; export CLAUDE_CONFIG_DIR=\"\$HOME/.claude\"; export CLAUDE_CODE_PROJECT_DIR_NAME=\"$dir_name\"; cd /workspace 2>/dev/null; [ -f ~/.env ] && . ~/.env; { [ -f \"\$HOME/.claude.json\" ] && [ ! -f \"\$HOME/.claude/.claude.json\" ] && mkdir -p \"\$HOME/.claude\" && cp \"\$HOME/.claude.json\" \"\$HOME/.claude/.claude.json\"; } 2>/dev/null; { [ -n \"\$CLAUDE_CODE_PROJECT_DIR_NAME\" ] && [ -d \"\$HOME/.claude/projects/-workspace\" ] && [ ! -e \"\$HOME/.claude/projects/\$CLAUDE_CODE_PROJECT_DIR_NAME\" ] && mv \"\$HOME/.claude/projects/-workspace\" \"\$HOME/.claude/projects/\$CLAUDE_CODE_PROJECT_DIR_NAME\"; } 2>/dev/null;"
 }
 
 # Connect to a running VM — launches Claude Code by default

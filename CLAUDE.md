@@ -30,6 +30,7 @@ keybindings.json, mcp.json, CLAUDE.md only — never runtime state.
 `CLAUDE_CODE_PROJECT_DIR_NAME=<sanitized basename>` so guest transcripts land in
 `~/.claude/projects/<name>` instead of `-workspace` (the name is only honored with a config
 dir set; with it set, Claude Code reads the global json from `$CLAUDE_CONFIG_DIR/.claude.json`).
+Pre-0.1.3 VMs are migrated by guarded commands in the connect prefix (cp json, mv -workspace).
 MCP servers live in `~/.claude.json` (not `~/.claude/`): only user-scoped (`mcpServers`)
 carry over; local-scoped (`projects["<host-path>"]`) don't — the VM mounts at `/workspace`.
 

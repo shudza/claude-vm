@@ -9,6 +9,7 @@
 # 5. start_virtiofsd fails when virtiofsd dies after binding its socket
 # 8. _guest_project_dir_name derives a sanitized name from the project basename
 # 9. connect_vm / connect_vm_shell export CLAUDE_CODE_PROJECT_DIR_NAME
+# 9b. the connect command migrates pre-CLAUDE_CONFIG_DIR VM state (config json + -workspace)
 # 10. sync_claude_config_to_vm includes agents/commands/workflows/keybindings
 # 11. sync_claude_config_to_vm syncs ~/.config/glab-cli/
 # 12. host ~/.claude.json syncs to ~/.claude/.claude.json (CLAUDE_CONFIG_DIR location)
@@ -312,6 +313,42 @@ if [[ "$output" == *'export CLAUDE_CODE_PROJECT_DIR_NAME="sample-app";'* ]] && [
 else
     fail "connect_vm_shell should export the name and exec a login shell: $output"
 fi
+
+# ── Test: connect migrates pre-CLAUDE_CONFIG_DIR VMs ─────────────────────────
+echo "--- Test 9b: connect command migrates legacy VM state ---"
+if [[ "$output" == *'cp "$HOME/.claude.json" "$HOME/.claude/.claude.json"'* ]] \
+   && [[ "$output" == *'mv "$HOME/.claude/projects/-workspace" "$HOME/.claude/projects/$CLAUDE_CODE_PROJECT_DIR_NAME"'* ]]; then
+    pass "connect command carries the config-json and transcript migrations"
+else
+    fail "connect command should carry the migrations: $output"
+fi
+if [[ "$output" == *'. ~/.env; { [ -f "$HOME/.claude.json" ]'* ]]; then
+    pass "migration runs after ~/.env so a user override of the name is respected"
+else
+    fail "migration should run after ~/.env: $output"
+fi
+mig_cmd="${output##*'. ~/.env; '}"
+mig_cmd="${mig_cmd% exec*}"
+MIG_HOME="$(mktemp -d)"
+mkdir -p "$MIG_HOME/.claude/projects/-workspace"
+echo '{"orig":1}' > "$MIG_HOME/.claude.json"
+echo conv > "$MIG_HOME/.claude/projects/-workspace/c.jsonl"
+HOME="$MIG_HOME" CLAUDE_CODE_PROJECT_DIR_NAME="sample-app" bash -c "$mig_cmd"
+if [[ "$(cat "$MIG_HOME/.claude/.claude.json" 2>/dev/null)" == '{"orig":1}' ]] \
+   && [[ -f "$MIG_HOME/.claude/projects/sample-app/c.jsonl" ]] \
+   && [[ ! -e "$MIG_HOME/.claude/projects/-workspace" ]]; then
+    pass "legacy VM state migrates: config json copied, -workspace renamed"
+else
+    fail "legacy migration should copy the json and rename -workspace: $(find "$MIG_HOME" -mindepth 1 2>/dev/null | tr '\n' ' ')"
+fi
+echo '{"newer":1}' > "$MIG_HOME/.claude/.claude.json"
+HOME="$MIG_HOME" CLAUDE_CODE_PROJECT_DIR_NAME="sample-app" bash -c "$mig_cmd"
+if [[ "$(cat "$MIG_HOME/.claude/.claude.json")" == '{"newer":1}' ]]; then
+    pass "an existing ~/.claude/.claude.json is never clobbered"
+else
+    fail "migration must not clobber an existing config-dir json"
+fi
+rm -rf "$MIG_HOME"
 
 rm -rf "$FAKE_BIN" "$(dirname "$CONN_PROJECT")"
 teardown_test_env

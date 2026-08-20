@@ -360,6 +360,30 @@ phase_launch() {
     else
         fail "claude-vm ssh project dir name" "got: '$shell_env'"
     fi
+
+    # Test: upgrade path — a VM created before CLAUDE_CONFIG_DIR was exported
+    # (config at ~/.claude.json, transcripts in projects/-workspace) must be
+    # migrated by the next connect, not re-run onboarding with empty history
+    _e2e_ssh "$FAKE_PROJECT_A" "rm -f ~/.claude/.claude.json \
+        && echo '{\"legacy\":\"cfg-sentinel\"}' > ~/.claude.json \
+        && rm -rf ~/.claude/projects \
+        && mkdir -p ~/.claude/projects/-workspace \
+        && echo transcript > ~/.claude/projects/-workspace/legacy-convo.jsonl" 2>/dev/null || true
+
+    echo "" | _e2e_cmd "$FAKE_PROJECT_A" ssh &>/dev/null || true
+
+    local migrated_cfg
+    migrated_cfg=$(_e2e_ssh "$FAKE_PROJECT_A" "cat ~/.claude/.claude.json" 2>/dev/null) || true
+    if echo "$migrated_cfg" | grep -q "cfg-sentinel"; then
+        pass "upgrade: legacy ~/.claude.json copied to ~/.claude/.claude.json on connect"
+    else
+        fail "upgrade config migration" "got: '$migrated_cfg'"
+    fi
+    if _e2e_ssh "$FAKE_PROJECT_A" "test -f ~/.claude/projects/project-a/legacy-convo.jsonl && test ! -e ~/.claude/projects/-workspace" 2>/dev/null; then
+        pass "upgrade: -workspace transcripts renamed to projects/project-a on connect"
+    else
+        fail "upgrade transcript migration" "$(_e2e_ssh "$FAKE_PROJECT_A" "ls ~/.claude/projects" 2>/dev/null | tr '\n' ' ')"
+    fi
 }
 
 # ── Phase 2b: Config sync ───────────────────────────────────────────────────
@@ -570,10 +594,11 @@ phase_rebase() {
     _e2e_ssh "$FAKE_PROJECT_A" "mkdir -p ~/.claude && echo '{\"sentinel\":\"rebase-test-12345\"}' > ~/.claude/settings.json" 2>/dev/null || true
 
     # Runtime state that must NOT survive, transcript + glab auth that must
-    _e2e_ssh "$FAKE_PROJECT_A" "mkdir -p ~/.claude/jobs ~/.claude/daemon ~/.claude/projects/-workspace ~/.config/glab-cli \
+    # (transcripts live under the project's dir name since CLAUDE_CODE_PROJECT_DIR_NAME)
+    _e2e_ssh "$FAKE_PROJECT_A" "mkdir -p ~/.claude/jobs ~/.claude/daemon ~/.claude/projects/project-a ~/.config/glab-cli \
         && echo job > ~/.claude/jobs/e2e-sentinel \
         && echo 99999 > ~/.claude/daemon/e2e-sentinel.lock \
-        && echo transcript > ~/.claude/projects/-workspace/e2e-sentinel.jsonl \
+        && echo transcript > ~/.claude/projects/project-a/e2e-sentinel.jsonl \
         && echo glab > ~/.config/glab-cli/e2e-sentinel" 2>/dev/null || true
 
     # Stop the VM before rebase
@@ -623,7 +648,7 @@ phase_rebase() {
     fi
 
     # Test: backup carries transcripts + glab-cli but no runtime state
-    if [[ -f "$backup_a/.claude/projects/-workspace/e2e-sentinel.jsonl" ]] \
+    if [[ -f "$backup_a/.claude/projects/project-a/e2e-sentinel.jsonl" ]] \
        && [[ -f "$backup_a/.config/glab-cli/e2e-sentinel" ]]; then
         pass "backup contains transcripts and glab-cli config"
     else
@@ -654,7 +679,7 @@ phase_rebase() {
     fi
 
     # Test: runtime-state sentinels did not come back; transcript + glab did
-    if _e2e_ssh "$FAKE_PROJECT_A" "test -f ~/.claude/projects/-workspace/e2e-sentinel.jsonl && test -f ~/.config/glab-cli/e2e-sentinel" 2>/dev/null; then
+    if _e2e_ssh "$FAKE_PROJECT_A" "test -f ~/.claude/projects/project-a/e2e-sentinel.jsonl && test -f ~/.config/glab-cli/e2e-sentinel" 2>/dev/null; then
         pass "transcript and glab-cli config restored after rebase"
     else
         fail "transcript/glab-cli restore" "sentinels missing in relaunched VM"
