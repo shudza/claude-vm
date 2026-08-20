@@ -384,6 +384,19 @@ phase_launch() {
     else
         fail "upgrade transcript migration" "$(_e2e_ssh "$FAKE_PROJECT_A" "ls ~/.claude/projects" 2>/dev/null | tr '\n' ' ')"
     fi
+
+    # Test: wizard-window upgrade — projects/<name> already exists (a session
+    # ran while migration was missing), history stranded in -workspace → merge
+    _e2e_ssh "$FAKE_PROJECT_A" "mkdir -p ~/.claude/projects/-workspace \
+        && echo stranded > ~/.claude/projects/-workspace/stranded-convo.jsonl" 2>/dev/null || true
+    echo "" | _e2e_cmd "$FAKE_PROJECT_A" ssh &>/dev/null || true
+    if _e2e_ssh "$FAKE_PROJECT_A" "test -f ~/.claude/projects/project-a/stranded-convo.jsonl \
+        && test -f ~/.claude/projects/project-a/legacy-convo.jsonl \
+        && test ! -e ~/.claude/projects/-workspace" 2>/dev/null; then
+        pass "upgrade: stranded -workspace merges into an existing projects/project-a"
+    else
+        fail "upgrade merge migration" "$(_e2e_ssh "$FAKE_PROJECT_A" "ls -R ~/.claude/projects" 2>/dev/null | tr '\n' ' ')"
+    fi
 }
 
 # ── Phase 2b: Config sync ───────────────────────────────────────────────────

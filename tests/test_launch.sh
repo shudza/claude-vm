@@ -348,6 +348,27 @@ if [[ "$(cat "$MIG_HOME/.claude/.claude.json")" == '{"newer":1}' ]]; then
 else
     fail "migration must not clobber an existing config-dir json"
 fi
+
+# Wizard-window VM: a session between 0.1.3 and 0.1.4 created projects/<name>,
+# stranding history in -workspace — entries must merge without overwriting
+mkdir -p "$MIG_HOME/.claude/projects/-workspace/memory"
+echo hist > "$MIG_HOME/.claude/projects/-workspace/hist.jsonl"
+echo mem  > "$MIG_HOME/.claude/projects/-workspace/memory/MEMORY.md"
+echo wiz  > "$MIG_HOME/.claude/projects/sample-app/wiz.jsonl"
+echo keep > "$MIG_HOME/.claude/projects/-workspace/wiz.jsonl"
+HOME="$MIG_HOME" CLAUDE_CODE_PROJECT_DIR_NAME="sample-app" bash -c "$mig_cmd"
+if [[ -f "$MIG_HOME/.claude/projects/sample-app/hist.jsonl" ]] \
+   && [[ -f "$MIG_HOME/.claude/projects/sample-app/memory/MEMORY.md" ]] \
+   && [[ "$(cat "$MIG_HOME/.claude/projects/sample-app/wiz.jsonl")" == wiz ]]; then
+    pass "both-dirs case merges -workspace into projects/<name> without overwriting"
+else
+    fail "merge migration failed: $(find "$MIG_HOME/.claude/projects" 2>/dev/null | tr '\n' ' ')"
+fi
+if [[ "$(cat "$MIG_HOME/.claude/projects/-workspace/wiz.jsonl" 2>/dev/null)" == keep ]]; then
+    pass "colliding entries are left behind in -workspace, never clobbered"
+else
+    fail "collision handling: -workspace/wiz.jsonl should survive with original content"
+fi
 rm -rf "$MIG_HOME"
 
 rm -rf "$FAKE_BIN" "$(dirname "$CONN_PROJECT")"

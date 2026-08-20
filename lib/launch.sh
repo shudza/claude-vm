@@ -61,14 +61,17 @@ _guest_project_dir_name() {
 # transcripts from ~/.claude/projects/$CLAUDE_CODE_PROJECT_DIR_NAME, so
 # without this an existing VM re-runs onboarding and hides its previous
 # conversations. Runs after ~/.env so an overridden (or emptied) name is
-# respected; both guards make it a one-time, idempotent no-op afterwards.
-# The mv never merges — if both dirs exist, -workspace is left untouched.
+# respected; the guards make it a one-time, idempotent no-op afterwards.
+# When BOTH transcript dirs exist (a wizard session between 0.1.3 and 0.1.4
+# created projects/<name> while history sat in -workspace), entries are
+# moved file-wise with mv -n — session files are UUID-named so nothing
+# collides, and anything that would is left behind in -workspace untouched.
 # Args: $1 = project directory
 _guest_env_prefix() {
     local project_dir="$1"
     local dir_name
     dir_name="$(_guest_project_dir_name "$project_dir")"
-    echo "export PATH=\"\$HOME/.local/bin:\$PATH\"; export COLORTERM=truecolor; export CLAUDE_CONFIG_DIR=\"\$HOME/.claude\"; export CLAUDE_CODE_PROJECT_DIR_NAME=\"$dir_name\"; cd /workspace 2>/dev/null; [ -f ~/.env ] && . ~/.env; { [ -f \"\$HOME/.claude.json\" ] && [ ! -f \"\$HOME/.claude/.claude.json\" ] && mkdir -p \"\$HOME/.claude\" && cp \"\$HOME/.claude.json\" \"\$HOME/.claude/.claude.json\"; } 2>/dev/null; { [ -n \"\$CLAUDE_CODE_PROJECT_DIR_NAME\" ] && [ -d \"\$HOME/.claude/projects/-workspace\" ] && [ ! -e \"\$HOME/.claude/projects/\$CLAUDE_CODE_PROJECT_DIR_NAME\" ] && mv \"\$HOME/.claude/projects/-workspace\" \"\$HOME/.claude/projects/\$CLAUDE_CODE_PROJECT_DIR_NAME\"; } 2>/dev/null;"
+    echo "export PATH=\"\$HOME/.local/bin:\$PATH\"; export COLORTERM=truecolor; export CLAUDE_CONFIG_DIR=\"\$HOME/.claude\"; export CLAUDE_CODE_PROJECT_DIR_NAME=\"$dir_name\"; cd /workspace 2>/dev/null; [ -f ~/.env ] && . ~/.env; { [ -f \"\$HOME/.claude.json\" ] && [ ! -f \"\$HOME/.claude/.claude.json\" ] && mkdir -p \"\$HOME/.claude\" && cp \"\$HOME/.claude.json\" \"\$HOME/.claude/.claude.json\"; } 2>/dev/null; { [ -n \"\$CLAUDE_CODE_PROJECT_DIR_NAME\" ] && [ -d \"\$HOME/.claude/projects/-workspace\" ] && { [ ! -e \"\$HOME/.claude/projects/\$CLAUDE_CODE_PROJECT_DIR_NAME\" ] && mv \"\$HOME/.claude/projects/-workspace\" \"\$HOME/.claude/projects/\$CLAUDE_CODE_PROJECT_DIR_NAME\" || { for _f in \"\$HOME/.claude/projects/-workspace/\"* \"\$HOME/.claude/projects/-workspace/\".[!.]*; do [ -e \"\$_f\" ] && mv -n \"\$_f\" \"\$HOME/.claude/projects/\$CLAUDE_CODE_PROJECT_DIR_NAME/\"; done; rmdir \"\$HOME/.claude/projects/-workspace\"; }; }; } 2>/dev/null;"
 }
 
 # Connect to a running VM — launches Claude Code by default
