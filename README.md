@@ -1,6 +1,10 @@
 # claude-vm
 
-QEMU sandbox for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Run Claude Code with full permissions in an isolated VM, with near-native filesystem performance via virtiofs.
+Pure Bash [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sandbox manager on top of bare QEMU.
+
+Run Claude Code with full permissions in an isolated VM with near-native filesystem performance.
+
+Shallow copies of one base image.
 
 ![demo](docs/demo.gif)
 
