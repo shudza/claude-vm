@@ -7,17 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.4] - 2026-08-19
-
-### Fixed
-
-- **Existing VMs no longer lose their config and conversation history after updating to 0.1.3.** v0.1.3 moved the guest's global config to `~/.claude/.claude.json` and transcripts to `~/.claude/projects/<project-name>`, but only handled new VMs and the rebase path — a pre-existing VM that was simply relaunched re-ran first-time onboarding and showed an empty conversation list (the old data was untouched at the old paths, just not read). Every connect now runs a one-time, guarded migration: `~/.claude.json` is copied to `~/.claude/.claude.json` if the latter doesn't exist, and `~/.claude/projects/-workspace` is renamed to the project's directory name. VMs that already re-ran onboarding keep their original file at `~/.claude.json`; restore it with `cp ~/.claude.json ~/.claude/.claude.json` inside the VM (while Claude Code isn't running).
-
-## [0.1.3] - 2026-08-19
+## [0.2.0] - 2026-08-19
 
 ### Added
 
-- Each VM's Claude Code transcripts now live under `~/.claude/projects/<project-name>` instead of every project sharing `-workspace`. `claude-vm` sets `CLAUDE_CODE_PROJECT_DIR_NAME` (plus `CLAUDE_CONFIG_DIR`, which the name requires) for both the Claude Code launch and `claude-vm ssh` shells; override them from `~/.env` inside the VM. The guest's global config json accordingly moves to `~/.claude/.claude.json` — synced there on new VMs and migrated automatically on the first launch after a rebase.
+- Each VM's Claude Code transcripts now live under `~/.claude/projects/<project-name>` instead of every project sharing `-workspace`. `claude-vm` sets `CLAUDE_CODE_PROJECT_DIR_NAME` (plus `CLAUDE_CONFIG_DIR`, which the name requires) for both the Claude Code launch and `claude-vm ssh` shells; override them from `~/.env` inside the VM. The guest's global config json accordingly moves to `~/.claude/.claude.json`. Existing VMs are migrated automatically on their next connect: the config json is copied over and `projects/-workspace` is renamed to the project name (merging file-wise, never overwriting, if the target already exists).
 - User-scope `agents/`, `commands/`, `workflows/` and `keybindings.json` from `~/.claude/` are synced into new VMs alongside plugins and skills.
 - GitLab support: `glab` ships in the full flavors, and `~/.config/glab-cli/` is synced into new VMs and preserved across `claude-vm rebase`, the same as `gh`.
 - Every flavor now comes in two variants: **slim** (git, Node.js, Python, GitHub CLI, Claude Code) and **full** (slim plus compilers, tmux, vim, and debugging tools). The default is `debian-slim`. Bare names like `debian` still work and mean the full variant, so existing setups keep their tools.
@@ -76,9 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `claude-vm rebase` command: refreshes the shared base image (Claude Code, OS packages, kernel) while preserving each project VM's persistent state by extracting `~/.claude/`, `~/.claude.json`, `~/.gitconfig`, and `~/.config/gh/` to a per-project backup directory, rebuilding the base from upstream, and lazy-restoring the extracted state on the project's next launch.
 
-[Unreleased]: https://github.com/shudza/claude-vm/compare/v0.1.4...HEAD
-[0.1.4]: https://github.com/shudza/claude-vm/compare/v0.1.3...v0.1.4
-[0.1.3]: https://github.com/shudza/claude-vm/compare/v0.1.2...v0.1.3
+[Unreleased]: https://github.com/shudza/claude-vm/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/shudza/claude-vm/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/shudza/claude-vm/compare/v0.1.1-alpha...v0.1.2
 [0.1.1-alpha]: https://github.com/shudza/claude-vm/compare/v0.1.0-alpha...v0.1.1-alpha
 [0.1.0-alpha]: https://github.com/shudza/claude-vm/releases/tag/v0.1.0-alpha
