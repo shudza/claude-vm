@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-20
+
 ### Changed
 
 - `claude-vm rebase` rebuilds only the configured `FLAVOR`'s base image instead of every flavor referenced by an old base or snapshot. Rebuilding the others was always wasted work — after a rebase, every project's snapshot is recreated from the *current* flavor anyway — and it doubled rebase time for anyone with a stray base from an earlier experiment. Other flavors' bases (and the legacy pre-flavor `base.qcow2`) are removed after a successful rebuild and rebuilt on demand by the next launch that selects them.
@@ -74,7 +76,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `claude-vm rebase` command: refreshes the shared base image (Claude Code, OS packages, kernel) while preserving each project VM's persistent state by extracting `~/.claude/`, `~/.claude.json`, `~/.gitconfig`, and `~/.config/gh/` to a per-project backup directory, rebuilding the base from upstream, and lazy-restoring the extracted state on the project's next launch.
 
-[Unreleased]: https://github.com/shudza/claude-vm/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/shudza/claude-vm/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/shudza/claude-vm/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/shudza/claude-vm/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/shudza/claude-vm/compare/v0.1.1-alpha...v0.1.2
 [0.1.1-alpha]: https://github.com/shudza/claude-vm/compare/v0.1.0-alpha...v0.1.1-alpha
