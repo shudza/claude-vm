@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-08-19
+
+### Fixed
+
+- **Existing VMs no longer lose their config and conversation history after updating to 0.1.3.** v0.1.3 moved the guest's global config to `~/.claude/.claude.json` and transcripts to `~/.claude/projects/<project-name>`, but only handled new VMs and the rebase path — a pre-existing VM that was simply relaunched re-ran first-time onboarding and showed an empty conversation list (the old data was untouched at the old paths, just not read). Every connect now runs a one-time, guarded migration: `~/.claude.json` is copied to `~/.claude/.claude.json` if the latter doesn't exist, and `~/.claude/projects/-workspace` is renamed to the project's directory name. VMs that already re-ran onboarding keep their original file at `~/.claude.json`; restore it with `cp ~/.claude.json ~/.claude/.claude.json` inside the VM (while Claude Code isn't running).
+
 ## [0.1.3] - 2026-08-19
 
 ### Added
@@ -70,7 +76,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `claude-vm rebase` command: refreshes the shared base image (Claude Code, OS packages, kernel) while preserving each project VM's persistent state by extracting `~/.claude/`, `~/.claude.json`, `~/.gitconfig`, and `~/.config/gh/` to a per-project backup directory, rebuilding the base from upstream, and lazy-restoring the extracted state on the project's next launch.
 
-[Unreleased]: https://github.com/shudza/claude-vm/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/shudza/claude-vm/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/shudza/claude-vm/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/shudza/claude-vm/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/shudza/claude-vm/compare/v0.1.1-alpha...v0.1.2
 [0.1.1-alpha]: https://github.com/shudza/claude-vm/compare/v0.1.0-alpha...v0.1.1-alpha
