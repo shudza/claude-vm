@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `claude-vm rebase` rebuilds only the configured `FLAVOR`'s base image instead of every flavor referenced by an old base or snapshot. Rebuilding the others was always wasted work — after a rebase, every project's snapshot is recreated from the *current* flavor anyway — and it doubled rebase time for anyone with a stray base from an earlier experiment. Other flavors' bases (and the legacy pre-flavor `base.qcow2`) are removed after a successful rebuild and rebuilt on demand by the next launch that selects them.
+
 ## [0.2.0] - 2026-08-19
 
 ### Added

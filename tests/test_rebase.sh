@@ -423,6 +423,61 @@ test_cmd_rebase_destroys_and_rebuilds() {
     teardown_test_env
 }
 
+# ── 12c: rebase rebuilds only the configured flavor's base ──────────────────
+
+test_cmd_rebase_only_current_flavor() {
+    echo "--- Test 12c: rebase rebuilds only the configured flavor ---"
+    setup_test_env
+
+    local proj="/tmp/proj-flavor-$$"
+    register_project "$proj"
+    : > "$(base_image_path)"
+
+    # Bases of another flavor and the legacy pre-flavor layout also exist
+    : > "$BASE_IMAGES_DIR/base-fedora-full.qcow2"
+    : > "$BASE_IMAGES_DIR/base.qcow2"
+    # A same-prefix file that is NOT a claude-vm base must survive
+    : > "$BASE_IMAGES_DIR/base-notaflavor.qcow2"
+
+    _extract_one_vm() { return 0; }
+    local -a _built=()
+    build_base_image() {
+        _built+=("$FLAVOR")
+        echo "new base" > "$(base_image_path)"
+    }
+
+    cmd_rebase --yes >/dev/null 2>&1
+
+    local ok=true
+    if [[ "${#_built[@]}" == 1 && "${_built[0]}" == "$FLAVOR" ]]; then
+        :
+    else
+        fail "single rebuild" "built: ${_built[*]}"; ok=false
+    fi
+    [[ -f "$(base_image_path)" ]] || { fail "current base" "missing"; ok=false; }
+    [[ -f "$BASE_IMAGES_DIR/base-fedora-full.qcow2" ]] \
+        && { fail "other flavor dropped" "base-fedora-full.qcow2 still present"; ok=false; }
+    [[ -f "$BASE_IMAGES_DIR/base.qcow2" ]] \
+        && { fail "legacy base dropped" "base.qcow2 still present"; ok=false; }
+    [[ -f "$BASE_IMAGES_DIR/base-notaflavor.qcow2" ]] \
+        || { fail "non-flavor file kept" "base-notaflavor.qcow2 was deleted"; ok=false; }
+
+    $ok && pass "only \$FLAVOR rebuilt; other flavors + legacy base removed, foreign files kept"
+
+    # Failure path: other bases must survive a failed build
+    : > "$BASE_IMAGES_DIR/base-fedora-full.qcow2"
+    register_project "$proj"
+    build_base_image() { return 1; }
+    cmd_rebase --yes >/dev/null 2>&1
+    if [[ -f "$BASE_IMAGES_DIR/base-fedora-full.qcow2" ]]; then
+        pass "other flavors' bases survive a failed rebuild"
+    else
+        fail "failed-build safety" "base-fedora-full.qcow2 deleted despite build failure"
+    fi
+
+    teardown_test_env
+}
+
 # ── 12b: rebase preserves sidecars for pending restores, drops the rest ─────
 
 test_cmd_rebase_sidecar_lifecycle() {
@@ -952,6 +1007,7 @@ test_rebase_bad_flag
 test_cmd_rebase_extracts_into_backup_dir
 test_cmd_rebase_stops_running_vms
 test_cmd_rebase_destroys_and_rebuilds
+test_cmd_rebase_only_current_flavor
 test_cmd_rebase_sidecar_lifecycle
 test_cmd_rebase_aborts_on_failure
 test_cmd_rebase_force_drops_failed

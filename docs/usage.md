@@ -105,8 +105,8 @@ claude-vm rebase --force              # Drop broken VM snapshots that can't be e
 
 1. Stops all running VMs
 2. For each project: boots the VM headless (no virtiofs), extracts persistent state via SSH/rsync
-3. Removes all project snapshots and the old base image
-4. Downloads and provisions a fresh base image
+3. Removes all project snapshots and all old base images
+4. Downloads and provisions a fresh base image for the configured `FLAVOR` only — bases of other flavors are not rebuilt eagerly; a later launch that selects such a flavor rebuilds its base on demand
 5. On the next launch, each project gets a fresh snapshot from the new base, and the extracted state is restored
 
 **State preserved:** `~/.claude/` (settings, credentials, plugins, skills, agents, commands, workflows, transcripts, plans, history), `~/.claude.json`, `~/.gitconfig`, `~/.config/gh/`, `~/.config/glab-cli/`, plus any extra paths configured via `REBASE_BACKUP_PATHS` (see below). Everything else in each VM is lost.

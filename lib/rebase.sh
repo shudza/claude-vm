@@ -474,8 +474,9 @@ EOF
     ui_info ""
     ui_info "This will:"
     ui_info "  1. Extract per-VM state from ${#projects[@]} project(s)"
-    ui_info "  2. Remove all snapshots and the base image"
-    ui_info "  3. Rebuild the base image from the latest cloud image"
+    ui_info "  2. Remove all snapshots and base images"
+    ui_info "  3. Rebuild the $FLAVOR base image from the latest cloud image"
+    ui_info "     (other flavors' bases are dropped and rebuilt on demand at launch)"
     ui_info "  4. Restore extracted state on next launch"
     ui_info ""
     ui_info "VM-side state preserved: $(_rebase_preserved_desc)"
@@ -573,63 +574,33 @@ EOF
     # and only mv's it into place on success) → delete old snapshots only
     # after a successful build (they're unbootable against the new base).
     #
-    # Rebuild every flavor that has a base image or a snapshot backed by one.
-    # Legacy pre-flavor base.qcow2 maps to the current FLAVOR; it is removed
-    # after the rebuilds succeed — rebase is the migration path off it.
-    local -A rebuild_flavors=()
-    local base_file fname legacy_base=false
-    for base_file in "$BASE_IMAGES_DIR"/base*.qcow2; do
-        [[ -f "$base_file" ]] || continue
-        fname="$(basename "$base_file")"
-        if [[ "$fname" == "base.qcow2" ]]; then
-            legacy_base=true
-            rebuild_flavors["$FLAVOR"]=1
-        elif [[ "$fname" =~ ^base-(.+)\.qcow2$ ]] && is_valid_flavor "${BASH_REMATCH[1]}"; then
-            rebuild_flavors["${BASH_REMATCH[1]}"]=1
-        fi
-    done
-    local snap backing
-    for snap in "$SNAPSHOTS_DIR"/*.qcow2; do
-        [[ -f "$snap" ]] || continue
-        backing="$(qemu-img info --output=json "$snap" 2>/dev/null | \
-            jq -r '.["backing-filename"] // empty' 2>/dev/null || true)"
-        fname="$(basename "$backing")"
-        if [[ "$fname" == "base.qcow2" ]]; then
-            rebuild_flavors["$FLAVOR"]=1
-        elif [[ "$fname" =~ ^base-(.+)\.qcow2$ ]] && is_valid_flavor "${BASH_REMATCH[1]}"; then
-            rebuild_flavors["${BASH_REMATCH[1]}"]=1
-        fi
-    done
-
+    # Only the configured FLAVOR's base is rebuilt. Snapshots are always
+    # recreated from the current FLAVOR on next launch, so bases of other
+    # flavors can never be used by a restored project — they are deleted
+    # after the build succeeds and rebuilt on demand by a future launch that
+    # selects that flavor. Legacy pre-flavor base.qcow2 is removed the same
+    # way — rebase is the migration path off it.
     ui_info ""
-    local flavor build_failed=""
-    local _saved_flavor="$FLAVOR" _saved_url="$BASE_IMAGE_URL" _saved_name="$BASE_IMAGE_NAME"
-    for flavor in "${!rebuild_flavors[@]}"; do
-        ui_info "Rebuilding base image ($flavor)..."
-        FLAVOR="$flavor"
-        BASE_IMAGE_URL="${FLAVOR_IMAGE_URL[$(flavor_distro "$flavor")]}"
-        BASE_IMAGE_NAME="${FLAVOR_IMAGE_NAME[$(flavor_distro "$flavor")]}"
-        rm -f "$(cloud_image_path)"
-        if ! build_base_image; then
-            build_failed="$flavor"
-            break
-        fi
-    done
-    FLAVOR="$_saved_flavor"
-    BASE_IMAGE_URL="$_saved_url"
-    BASE_IMAGE_NAME="$_saved_name"
-
-    if [[ -n "$build_failed" ]]; then
+    ui_info "Rebuilding base image ($FLAVOR)..."
+    rm -f "$(cloud_image_path)"
+    if ! build_base_image; then
         ui_warn ""
-        ui_warn "Base image rebuild failed for '$build_failed'. Old snapshots are intact."
+        ui_warn "Base image rebuild failed for '$FLAVOR'. Old snapshots are intact."
         ui_warn "Backups are intact in $BACKUPS_DIR/"
-        ui_warn "Run 'claude-vm build --flavor $build_failed' manually, then relaunch to trigger restore."
+        ui_warn "Run 'claude-vm build' manually, then relaunch to trigger restore."
         return 1
     fi
 
-    if [[ "$legacy_base" == true ]]; then
-        rm -f "$BASE_IMAGES_DIR/base.qcow2"
-    fi
+    local base_file fname
+    for base_file in "$BASE_IMAGES_DIR"/base*.qcow2; do
+        [[ -f "$base_file" ]] || continue
+        fname="$(basename "$base_file")"
+        [[ "$fname" == "base-${FLAVOR}.qcow2" ]] && continue
+        if [[ "$fname" == "base.qcow2" ]] || \
+           { [[ "$fname" =~ ^base-(.+)\.qcow2$ ]] && is_valid_flavor "${BASH_REMATCH[1]}"; }; then
+            rm -f "$base_file"
+        fi
+    done
 
     ui_info "Removing old snapshots..."
     if [[ -d "$SNAPSHOTS_DIR" ]]; then
