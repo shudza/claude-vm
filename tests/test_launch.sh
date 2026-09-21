@@ -314,6 +314,40 @@ else
     fail "connect_vm_shell should export the name and exec a login shell: $output"
 fi
 
+# ── Test: connect_vm_shell runs a one-shot command with the guest env ───────
+# (issue #9: `claude-vm ssh "<cmd>"`)
+echo "--- Test 9c: connect_vm_shell runs a one-shot command ---"
+os_out="$(PATH="$FAKE_BIN:$PATH" connect_vm_shell 12345 "$CONN_PROJECT" claude plugin install ponytail@ponytail 2>&1)"
+if [[ "$os_out" == *'export CLAUDE_CODE_PROJECT_DIR_NAME="sample-app";'* ]] \
+   && [[ "$os_out" == *'claude plugin install ponytail@ponytail'* ]]; then
+    pass "one-shot form keeps the env prefix and appends the command"
+else
+    fail "one-shot form should keep the env prefix + append the command: $os_out"
+fi
+if [[ "$os_out" != *'SHELL:-/bin/bash'* ]]; then
+    pass "one-shot form does not exec the login shell (no -t)"
+else
+    fail "one-shot form should not exec a login shell: $os_out"
+fi
+
+# ── Test: single-arg one-shot passes shell metacharacters verbatim ─────────
+echo "--- Test 9d: single-arg command keeps the pipe verbatim ---"
+os_pipe="$(PATH="$FAKE_BIN:$PATH" connect_vm_shell 12345 "$CONN_PROJECT" 'echo hi | wc -l' 2>&1)"
+if [[ "$os_pipe" == *'echo hi | wc -l'* ]]; then
+    pass "single-arg form passes the pipe through to the guest shell"
+else
+    fail "single-arg form should keep the pipe verbatim: $os_pipe"
+fi
+
+# ── Test: multi-arg one-shot re-quotes args to preserve boundaries ──────────
+echo "--- Test 9e: multi-arg command re-quotes to keep word boundaries ---"
+os_q="$(PATH="$FAKE_BIN:$PATH" connect_vm_shell 12345 "$CONN_PROJECT" git commit -m "fix: foo" 2>&1)"
+if [[ "$os_q" == *'fix:\ foo'* ]]; then
+    pass "multi-arg form re-quotes args so a multi-word arg stays one"
+else
+    fail "multi-arg form should preserve word boundaries: $os_q"
+fi
+
 # ── Test: connect migrates pre-CLAUDE_CONFIG_DIR VMs ─────────────────────────
 echo "--- Test 9b: connect command migrates legacy VM state ---"
 if [[ "$output" == *'cp "$HOME/.claude.json" "$HOME/.claude/.claude.json"'* ]] \

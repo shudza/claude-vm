@@ -33,7 +33,7 @@ Usage:
   claude-vm [-- ARGS...]              Launch sandbox and enter Claude Code
   claude-vm build [--flavor X]        Build (or rebuild) the base image
   claude-vm launch [DIR] [-- ARGS...] Launch sandbox for a specific directory
-  claude-vm ssh                       SSH shell into the running sandbox
+  claude-vm ssh [DIR] [-- CMD...]     SSH into the sandbox; run CMD if given
   claude-vm stop                      Stop the running sandbox (preserves snapshot)
   claude-vm stop --all                Stop all running sandboxes
   claude-vm reset                     Reset project snapshot (fresh from base)
@@ -250,8 +250,41 @@ cmd_launch() {
 }
 
 # SSH command
+#
+#   claude-vm ssh                    Shell into the running VM for $PWD
+#   claude-vm ssh [DIR]              Shell into the running VM for DIR
+#   claude-vm ssh [DIR] -- CMD...    Run CMD in the VM (one-shot, no TTY)
+#   claude-vm ssh CMD                Run CMD in $PWD's VM (CMD is not a dir)
+#
+# A bare single positional that isn't an existing directory is treated as a
+# command for the current project's VM (issue #9); use -- to be explicit, or
+# pass a real directory to shell into it.
 cmd_ssh() {
-    local project_dir="${1:-$PWD}"
+    local project_dir="$PWD"
+    local command=()
+    local seen_separator=false
+    local positional_count=0
+
+    for arg in "$@"; do
+        if [[ "$arg" == "--" ]]; then
+            seen_separator=true
+            continue
+        fi
+        if $seen_separator; then
+            command+=("$arg")
+        else
+            project_dir="$arg"
+            (( ++positional_count ))
+        fi
+    done
+
+    # A lone bare positional that is not a directory is a command to run in
+    # the current project's VM (issue #9).
+    if ! $seen_separator && (( positional_count == 1 )) && [[ ! -d "$project_dir" ]]; then
+        command=("$project_dir")
+        project_dir="$PWD"
+    fi
+
     load_config
 
     if ! is_vm_running "$project_dir"; then
@@ -259,7 +292,7 @@ cmd_ssh() {
         return 1
     fi
 
-    connect_vm_shell "$(get_project_ssh_port "$project_dir")" "$project_dir"
+    connect_vm_shell "$(get_project_ssh_port "$project_dir")" "$project_dir" ${command[@]+"${command[@]}"}
 }
 
 # Stop command

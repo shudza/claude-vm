@@ -91,13 +91,36 @@ connect_vm() {
 
 # Connect to a running VM shell (no Claude Code). Same environment as
 # connect_vm so `claude` started by hand lands in the same transcript dir.
-# Args: $1 = SSH port, $2 = project directory
+# With a command (3rd+ args) it runs that command once in this environment
+# and returns its exit code instead of opening a login shell; the one-shot
+# form omits -t so it works from scripts and CI (issue #9).
+#
+# Command quoting follows native `ssh host "cmd"`:
+#   * one command arg is a verbatim remote shell line, so pipes, redirects
+#     and $vars pass through to the guest shell;
+#   * multiple args were already split by the calling shell, so each is
+#     re-quoted with %q to keep word boundaries (e.g. `git commit -m "a b"`).
+# Args: $1 = SSH port, $2 = project directory, remaining = command (optional)
 connect_vm_shell() {
     local port="$1"
     local project_dir="$2"
+    shift 2
     _build_ssh_cmd "$port"
-    exec "${_ssh_cmd[@]}" -t \
-        "$(_guest_env_prefix "$project_dir") exec \"\${SHELL:-/bin/bash}\" -l"
+    if [[ $# -eq 0 ]]; then
+        # Interactive: TTY + login shell.
+        exec "${_ssh_cmd[@]}" -t \
+            "$(_guest_env_prefix "$project_dir") exec \"\${SHELL:-/bin/bash}\" -l"
+    elif [[ $# -eq 1 ]]; then
+        # Single command: pass the line verbatim to the guest shell.
+        exec "${_ssh_cmd[@]}" \
+            "$(_guest_env_prefix "$project_dir") $1"
+    else
+        # Multiple args: re-quote each so the guest shell sees the boundaries.
+        local quoted
+        quoted="$(printf '%q ' "$@")"
+        exec "${_ssh_cmd[@]}" \
+            "$(_guest_env_prefix "$project_dir") $quoted"
+    fi
 }
 
 # Build rsync command that tunnels over the VM's SSH connection

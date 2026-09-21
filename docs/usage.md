@@ -53,13 +53,20 @@ claude-vm launch /path/to/project -- --model sonnet   # With extra claude args
 
 ### `claude-vm ssh`
 
-Open a plain shell (no Claude Code) in the running VM.
+Open a plain shell (no Claude Code) in the running VM, or run a one-shot command.
 
 ```bash
-claude-vm ssh
+claude-vm ssh                          # shell into the current project's VM
+claude-vm ssh /path/to/project         # shell into a specific project's VM
+claude-vm ssh "claude plugin install ponytail@ponytail"   # run a command
+claude-vm ssh /path/to/project -- make test               # run a command in a specific VM
 ```
 
-The shell gets the same environment as the Claude Code launch, including `CLAUDE_CODE_PROJECT_DIR_NAME` (see below), so running `claude` by hand writes to the same transcript directory.
+The shell (and any command) gets the same environment as the Claude Code launch, including `CLAUDE_CODE_PROJECT_DIR_NAME` (see below), so running `claude` by hand writes to the same transcript directory.
+
+A single argument that is not an existing directory is treated as a command to run in the current project's VM; use `--` to pass a command alongside an explicit directory. The one-shot form runs without a TTY (so it works from scripts and CI) and returns the command's exit code.
+
+Quoting follows native `ssh host "cmd"`: quote the *whole* remote command when it contains shell syntax you want the **guest** shell to interpret — `claude-vm ssh 'echo hi | wc -l'` — so pipes and `$vars` pass through. Separate unquoted words are re-quoted individually so their boundaries survive, e.g. `claude-vm ssh -- git commit -m "a b"` runs `git commit -m 'a b'` (one argument) inside the VM.
 
 ### Transcript directory inside the VM
 
