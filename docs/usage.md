@@ -80,10 +80,10 @@ Copy a file or directory from the host into the running VM. Recursion is always 
 claude-vm cp notes.md .                    # host notes.md -> /workspace/notes.md
 claude-vm cp ./src .                       # host ./src -> /workspace/src (recursively)
 claude-vm cp /etc/hosts /tmp/hosts         # absolute guest path
-claude-vm cp ~/.secrets ~/private          # VM user's home
+claude-vm cp ~/.secrets '~/private'         # guest '~' — quoted, so the host shell leaves it
 ```
 
-The destination is a guest path: `.` and other relative paths resolve under `/workspace`, the mount of the current project's directory, `~` is the VM user's home, and absolute paths are used as written. If the destination path already exists as a directory, the source is copied *inside* it (standard `cp -r`/scp semantics); otherwise the destination is created as a copy of the source. The VM must be running; the copy is transferred over SSH on the project's SSH port.
+The destination is a guest path: `.` and other relative paths resolve under `/workspace`, the mount of the current project's directory, `~` is the VM user's home, and absolute paths are used as written. A guest-side `~` must be quoted (as above) — unquoted, the *host* shell expands it to the host's home before `claude-vm` ever sees it. If the destination path already exists as a directory, the source is copied *inside* it (standard `cp -r`/scp semantics); otherwise the destination is created as a copy of the source. The VM must be running; the copy is transferred over SSH on the project's SSH port.
 
 ### `claude-vm stop`
 

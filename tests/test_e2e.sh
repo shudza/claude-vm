@@ -516,21 +516,24 @@ phase_cp() {
     echo "=== Phase 3b: Copy into guest ==="
     _require_phase "copy" || return
 
-    local src_file="$FAKE_PROJECT_A/cp-test.txt"
+    # The file source lives OUTSIDE the project dir: cp'ing a file to '.'
+    # writes through the same virtiofs mount the source is on, so an
+    # in-project source would truncate the file scp is reading from it.
+    local src_file="$E2E_DIR/host-only.txt"
     local src_dir="$FAKE_PROJECT_A/cp-dir"
     echo "cp file sentinel" > "$src_file"
     mkdir -p "$src_dir/nested"
     echo "cp dir top" > "$src_dir/top.txt"
     echo "cp dir sentinel" > "$src_dir/nested/deep.txt"
 
-    # File to '.': lands at the root of the project's /workspace mount
+    # File to '.': lands at the root of the project's /workspace mount.
+    # Existence only — the guest read of a /workspace file races the same
+    # virtiofs write, so content is asserted on the guest-only /tmp copy.
     if _e2e_cmd "$FAKE_PROJECT_A" cp "$src_file" . 2>/dev/null; then
-        local guest_content
-        guest_content=$(_e2e_ssh "$FAKE_PROJECT_A" "cat /workspace/cp-test.txt" 2>/dev/null) || true
-        if [[ "$guest_content" == "cp file sentinel" ]]; then
-            pass "cp file to '.': guest sees the content"
+        if _e2e_ssh "$FAKE_PROJECT_A" "test -f /workspace/host-only.txt" 2>/dev/null; then
+            pass "cp file to '.': file arrives at the /workspace root"
         else
-            fail "cp file to '.'" "got '$guest_content'"
+            fail "cp file to '.'" "file missing in guest /workspace"
         fi
     else
         fail "cp file to '.'" "claude-vm cp exited nonzero"
@@ -577,7 +580,7 @@ phase_cp() {
     fi
 
     # Clean up guest-side artifacts (virtiofs mirrors them to the host)
-    _e2e_ssh "$FAKE_PROJECT_A" "rm -rf /workspace/cp-test.txt /workspace/vendor \
+    _e2e_ssh "$FAKE_PROJECT_A" "rm -rf /workspace/host-only.txt /workspace/vendor \
         /workspace/existing /tmp/cp-abs.txt" 2>/dev/null || true
 }
 
