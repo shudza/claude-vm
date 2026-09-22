@@ -74,7 +74,7 @@ Every project mounts at `/workspace`, so by default Claude Code would keep every
 
 ### `claude-vm cp`
 
-Copy a file or directory from the host into the running VM. Recursion is always enabled, so directories need no extra flag.
+Copy a file or directory from the host into the running VM. Recursion is always enabled, so directories need no extra flag; `-r`, `-R` and `--recursive` are accepted and ignored.
 
 ```bash
 claude-vm cp notes.md .                    # host notes.md -> /workspace/notes.md

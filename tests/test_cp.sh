@@ -220,6 +220,23 @@ test_cp_help() {
     fi
 }
 
+test_cp_recursive_flags_noop() {
+    local flag bad=""
+    for flag in -r -R --recursive; do
+        touch "$WORK_DIR/notes.md"
+        reset_scp_args
+        run_cp "$flag" notes.md .
+        if (( RC != 0 )); then
+            bad+="$flag(rc=$RC) "
+        fi
+    done
+    if [[ -z "$bad" ]]; then
+        pass "cp -r/-R/--recursive accepted as no-ops (recursion always on)"
+    else
+        fail "cp recursive flags" "$bad"
+    fi
+}
+
 test_cp_requires_running_vm() {
     VM_RUNNING=false
     run_cp a b
@@ -411,6 +428,7 @@ run_test test_cp_needs_two_args_one
 run_test test_cp_needs_two_args_three
 run_test test_cp_unknown_option
 run_test test_cp_help
+run_test test_cp_recursive_flags_noop
 run_test test_cp_requires_running_vm
 run_test test_cp_missing_source
 run_test test_cp_empty_destination

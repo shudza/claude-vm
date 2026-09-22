@@ -321,7 +321,8 @@ cmd_cp() {
 Usage: claude-vm cp SRC DST
 
 Copy a host file or directory into the running VM for the current project.
-Recursion is always enabled, so directories need no extra flag.
+Recursion is always enabled, so directories need no extra flag; -r, -R and
+--recursive are accepted and ignored.
 
   SRC   Host path (file or directory)
   DST   Guest path. '.' and other relative paths resolve under /workspace,
@@ -334,6 +335,10 @@ Examples:
   claude-vm cp /etc/hosts /tmp/hosts    # absolute guest path
 EOF
                     return 0
+                    ;;
+                -r|-R|--recursive)
+                    # Recursion is already on; accept the reflexive flag as a no-op
+                    continue
                     ;;
                 *)
                     echo "Unknown option: $arg" >&2
