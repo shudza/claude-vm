@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `claude-vm ssh` can now run a one-shot command in the running VM instead of only opening a shell: `claude-vm ssh "claude plugin install ponytail@ponytail"` (or `claude-vm ssh [DIR] -- CMD...` for an explicit directory). The command runs with the same guest environment as the Claude Code launch, without a TTY, and returns the command's exit code — so it works from scripts and CI for automated setup. Quoting follows native `ssh host "cmd"`: a single argument is a verbatim remote shell line (pipes and `$vars` pass through), while multiple arguments are re-quoted so word boundaries survive.
+- New `claude-vm cp SRC DST` command copies a host file or directory into the running VM over SSH. `-r` is always on, so directories need no flag. The destination is a guest path: `.` and relative paths resolve under the project's `/workspace` mount, `~` is the VM user's home, and absolute paths pass through.
 
 ## [0.2.1] - 2026-08-20
 

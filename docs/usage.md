@@ -72,6 +72,19 @@ Quoting follows native `ssh host "cmd"`: quote the *whole* remote command when i
 
 Every project mounts at `/workspace`, so by default Claude Code would keep every VM's transcripts under `~/.claude/projects/-workspace`. `claude-vm` sets `CLAUDE_CODE_PROJECT_DIR_NAME` to the project's directory name (restricted to `A-Za-z0-9_-`, max 64 chars — Claude Code silently ignores anything else; `my-app` for `~/code/my-app`), so transcripts land in `~/.claude/projects/my-app` instead. `CLAUDE_CONFIG_DIR` is also set to its default `~/.claude`, because Claude Code only honors the name when a config dir is explicitly set; as a consequence the guest's global config json lives at `~/.claude/.claude.json` (the sync and rebase handle this). To override either, export the variable from `~/.env` inside the VM — it is sourced after the defaults are set. VMs created before this feature are migrated automatically on their next connect: the config json is copied to the new location and `projects/-workspace` is renamed to the project name; if the target directory already exists, entries are merged file-wise without overwriting anything (one-time and idempotent).
 
+### `claude-vm cp`
+
+Copy a file or directory from the host into the running VM. Recursion is always enabled, so directories need no extra flag.
+
+```bash
+claude-vm cp notes.md .                    # host notes.md -> /workspace/notes.md
+claude-vm cp ./src .                       # host ./src -> /workspace/src (recursively)
+claude-vm cp /etc/hosts /tmp/hosts         # absolute guest path
+claude-vm cp ~/.secrets ~/private          # VM user's home
+```
+
+The destination is a guest path: `.` and other relative paths resolve under `/workspace`, the mount of the current project's directory, `~` is the VM user's home, and absolute paths are used as written. If the destination path already exists as a directory, the source is copied *inside* it (standard `cp -r`/scp semantics); otherwise the destination is created as a copy of the source. The VM must be running; the copy is transferred over SSH on the project's SSH port.
+
 ### `claude-vm stop`
 
 Stop the VM gracefully. Preserves the project snapshot on disk.

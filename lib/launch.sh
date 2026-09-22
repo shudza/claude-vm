@@ -29,6 +29,78 @@ _build_ssh_cmd() {
     )
 }
 
+# Build scp command array for copying host paths into the VM. Mirrors
+# _build_ssh_cmd, except scp spells the port -P; the caller appends the
+# source and the "<user>@localhost:<guest-path>" destination.
+# Args: $1 = SSH port
+# Sets: _scp_cmd array (caller uses it)
+_build_scp_cmd() {
+    local port="$1"
+    local ssh_key="$CLAUDE_VM_DIR/keys/id_ed25519"
+    _scp_cmd=(scp)
+    if [[ -f "$ssh_key" ]]; then
+        _scp_cmd+=(-i "$ssh_key")
+    fi
+    _scp_cmd+=(
+        -o StrictHostKeyChecking=no
+        -o UserKnownHostsFile=/dev/null
+        -o LogLevel=ERROR
+        -P "$port"
+    )
+}
+
+# Resolve a destination from the command line to an absolute path inside the
+# guest. Every project mounts at /workspace, so '.' and any other relative
+# path resolve there; '~' is the VM user's home. Nothing is normalized:
+# '/workspace/../etc' reaches the guest as written.
+# Args: $1 = destination path
+# Prints: resolved absolute guest path (exit 1 when empty)
+_resolve_guest_path() {
+    local path="$1"
+    case "$path" in
+        "")    return 1 ;;
+        /*)    echo "$path" ;;
+        .|./)  echo "/workspace" ;;
+        ./*)   echo "/workspace/${path#./}" ;;
+        "~")   echo "/home/$VM_USER" ;;
+        "~/"*)
+            # Offset slice, not ${path#~...}: a tilde in the strip pattern is
+            # tilde-expanded to the host $HOME by some bash versions.
+            echo "/home/$VM_USER/${path:2}"
+            ;;
+        *)     echo "/workspace/$path" ;;
+    esac
+}
+
+# Copy a host file or directory into the running VM over SSH.
+# -r is always passed: it is a no-op for regular files, and it means
+# directories never need an extra flag.
+# Args: $1 = SSH port, $2 = host source, $3 = absolute guest destination
+copy_to_vm() {
+    local port="$1"
+    local src="$2"
+    local guest_dst="$3"
+
+    if [[ ! -e "$src" ]]; then
+        echo "Source not found: $src" >&2
+        return 1
+    fi
+
+    if [[ "$guest_dst" != /* ]]; then
+        echo "Guest destination must be an absolute path: $guest_dst" >&2
+        return 1
+    fi
+
+    # `claude-vm cp -- -name` is legal, but a leading '-' would otherwise be
+    # read by scp as an option.
+    if [[ "$src" == -* ]]; then
+        src="./$src"
+    fi
+
+    _build_scp_cmd "$port"
+    "${_scp_cmd[@]}" -r "$src" "$VM_USER@localhost:$guest_dst"
+}
+
 # Name Claude Code uses for the guest's ~/.claude/projects/<name> transcript
 # dir. Every project mounts at /workspace, so without this every VM would
 # write to ~/.claude/projects/-workspace. Claude Code (2.1.236) accepts the

@@ -86,6 +86,7 @@ First run builds a base image (2-3 minutes plus the cloud image download), creat
 | `claude-vm launch [DIR] [-- ARGS...]` | Launch sandbox for a specific directory |
 | `claude-vm build [--flavor X]` | Build (or rebuild) the base image |
 | `claude-vm ssh [DIR] [-- CMD...]` | Shell into the VM, or run a one-shot command |
+| `claude-vm cp SRC DST` | Copy a host file or directory into the VM (`. = /workspace`) |
 | `claude-vm stop [--all]` | Stop the VM (preserves snapshot) |
 | `claude-vm reset` | Reset project snapshot to fresh state |
 | `claude-vm rebase [--force] [--yes]` | Rebuild base, migrate VM state |

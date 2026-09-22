@@ -34,6 +34,7 @@ Usage:
   claude-vm build [--flavor X]        Build (or rebuild) the base image
   claude-vm launch [DIR] [-- ARGS...] Launch sandbox for a specific directory
   claude-vm ssh [DIR] [-- CMD...]     SSH into the sandbox; run CMD if given
+  claude-vm cp SRC DST                Copy a host file/dir into the VM (. = /workspace)
   claude-vm stop                      Stop the running sandbox (preserves snapshot)
   claude-vm stop --all                Stop all running sandboxes
   claude-vm reset                     Reset project snapshot (fresh from base)
@@ -293,6 +294,80 @@ cmd_ssh() {
     fi
 
     connect_vm_shell "$(get_project_ssh_port "$project_dir")" "$project_dir" ${command[@]+"${command[@]}"}
+}
+
+# Copy command — copy a host file or directory into the running VM
+#
+#   claude-vm cp SRC DST
+#
+# SRC is a host path; DST is a path inside the guest for the current project:
+# '.' and other relative paths resolve under /workspace (the mount of the
+# project directory), '~' is the VM user's home, and absolute paths are used
+# as written. Recursion is always on, so directories need no extra flag.
+cmd_cp() {
+    local args=()
+    local seen_separator=false
+    local arg
+
+    for arg in "$@"; do
+        if [[ "$arg" == "--" ]]; then
+            seen_separator=true
+            continue
+        fi
+        if ! $seen_separator && [[ "$arg" == -* ]]; then
+            case "$arg" in
+                -h|--help)
+                    cat << 'EOF'
+Usage: claude-vm cp SRC DST
+
+Copy a host file or directory into the running VM for the current project.
+Recursion is always enabled, so directories need no extra flag.
+
+  SRC   Host path (file or directory)
+  DST   Guest path. '.' and other relative paths resolve under /workspace,
+        the mount of the current project's directory; '~' is the VM user's
+        home; absolute paths are used as written.
+
+Examples:
+  claude-vm cp notes.md .               # host notes.md -> /workspace/notes.md
+  claude-vm cp ./src .                  # host ./src -> /workspace/src (recursively)
+  claude-vm cp /etc/hosts /tmp/hosts    # absolute guest path
+EOF
+                    return 0
+                    ;;
+                *)
+                    echo "Unknown option: $arg" >&2
+                    echo "Usage: claude-vm cp SRC DST" >&2
+                    return 1
+                    ;;
+            esac
+        fi
+        args+=("$arg")
+    done
+
+    if (( ${#args[@]} != 2 )); then
+        echo "Usage: claude-vm cp SRC DST" >&2
+        echo "Run 'claude-vm cp --help' for details." >&2
+        return 1
+    fi
+
+    load_config
+
+    local project_dir="$PWD"
+    if ! is_vm_running "$project_dir"; then
+        echo "No VM running for this project. Run 'claude-vm' to start one." >&2
+        return 1
+    fi
+
+    local guest_dst
+    if ! guest_dst="$(_resolve_guest_path "${args[1]}")"; then
+        echo "Invalid destination path: (empty)" >&2
+        return 1
+    fi
+
+    ui_info "Copying ${args[0]} -> $VM_USER@localhost:$guest_dst"
+    copy_to_vm "$(get_project_ssh_port "$project_dir")" "${args[0]}" "$guest_dst" || return $?
+    ui_done "Copied to $guest_dst"
 }
 
 # Stop command
@@ -665,6 +740,9 @@ main() {
             ;;
         ssh)
             cmd_ssh "$@"
+            ;;
+        cp)
+            cmd_cp "$@"
             ;;
         stop)
             cmd_stop "$@"

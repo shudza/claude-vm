@@ -509,6 +509,78 @@ phase_multi_instance() {
     fi
 }
 
+# ── Phase 3b: Copy into guest ──────────────────────────────────────────────
+
+phase_cp() {
+    echo ""
+    echo "=== Phase 3b: Copy into guest ==="
+    _require_phase "copy" || return
+
+    local src_file="$FAKE_PROJECT_A/cp-test.txt"
+    local src_dir="$FAKE_PROJECT_A/cp-dir"
+    echo "cp file sentinel" > "$src_file"
+    mkdir -p "$src_dir/nested"
+    echo "cp dir top" > "$src_dir/top.txt"
+    echo "cp dir sentinel" > "$src_dir/nested/deep.txt"
+
+    # File to '.': lands at the root of the project's /workspace mount
+    if _e2e_cmd "$FAKE_PROJECT_A" cp "$src_file" . 2>/dev/null; then
+        local guest_content
+        guest_content=$(_e2e_ssh "$FAKE_PROJECT_A" "cat /workspace/cp-test.txt" 2>/dev/null) || true
+        if [[ "$guest_content" == "cp file sentinel" ]]; then
+            pass "cp file to '.': guest sees the content"
+        else
+            fail "cp file to '.'" "got '$guest_content'"
+        fi
+    else
+        fail "cp file to '.'" "claude-vm cp exited nonzero"
+    fi
+
+    # Directory to a fresh destination: scp -r makes the destination a copy
+    # of the source tree
+    if _e2e_cmd "$FAKE_PROJECT_A" cp cp-dir vendor 2>/dev/null; then
+        if _e2e_ssh "$FAKE_PROJECT_A" "test -f /workspace/vendor/top.txt \
+            && test -f /workspace/vendor/nested/deep.txt" 2>/dev/null; then
+            pass "cp directory: -r copied the tree into a new guest dir"
+        else
+            fail "cp directory to new destination" \
+                "$( _e2e_ssh "$FAKE_PROJECT_A" 'ls -R /workspace/vendor' 2>/dev/null | tr '\n' ' ')"
+        fi
+    else
+        fail "cp directory to new destination" "claude-vm cp exited nonzero"
+    fi
+
+    # Directory into an existing destination: copied inside it
+    _e2e_ssh "$FAKE_PROJECT_A" "mkdir -p /workspace/existing" 2>/dev/null || true
+    if _e2e_cmd "$FAKE_PROJECT_A" cp cp-dir existing 2>/dev/null; then
+        if _e2e_ssh "$FAKE_PROJECT_A" "test -f /workspace/existing/cp-dir/nested/deep.txt" 2>/dev/null; then
+            pass "cp directory into an existing guest dir nests under it"
+        else
+            fail "cp directory into existing dir" \
+                "$( _e2e_ssh "$FAKE_PROJECT_A" 'ls -R /workspace/existing' 2>/dev/null | tr '\n' ' ')"
+        fi
+    else
+        fail "cp directory into existing dir" "claude-vm cp exited nonzero"
+    fi
+
+    # Absolute guest path
+    if _e2e_cmd "$FAKE_PROJECT_A" cp "$src_file" /tmp/cp-abs.txt 2>/dev/null; then
+        local abs_content
+        abs_content=$(_e2e_ssh "$FAKE_PROJECT_A" "cat /tmp/cp-abs.txt" 2>/dev/null) || true
+        if [[ "$abs_content" == "cp file sentinel" ]]; then
+            pass "cp to an absolute guest path"
+        else
+            fail "cp to an absolute guest path" "got '$abs_content'"
+        fi
+    else
+        fail "cp to an absolute guest path" "claude-vm cp exited nonzero"
+    fi
+
+    # Clean up guest-side artifacts (virtiofs mirrors them to the host)
+    _e2e_ssh "$FAKE_PROJECT_A" "rm -rf /workspace/cp-test.txt /workspace/vendor \
+        /workspace/existing /tmp/cp-abs.txt" 2>/dev/null || true
+}
+
 # ── Phase 4: Stop ───────────────────────────────────────────────────────────
 
 phase_stop() {
@@ -876,6 +948,7 @@ main() {
     phase_launch
     phase_config_sync
     phase_multi_instance
+    phase_cp
     phase_stop
     phase_resume
     phase_rebase
