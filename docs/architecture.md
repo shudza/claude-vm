@@ -129,6 +129,7 @@ Only **user-scoped** MCP servers carry over automatically. For a server you want
 ```
 ~/.claude-vm/
   config                   User configuration file
+  cloud-init.yaml          Optional user cloud-init overlay (merged into base user-data)
   keys/
     id_ed25519             SSH keypair for VM access
     id_ed25519.pub
@@ -165,11 +166,17 @@ Only **user-scoped** MCP servers carry over automatically. For a server you want
       virtiofsd.log         virtiofsd daemon output
 ```
 
+`cloud-init.yaml` is optional. When it holds real content, `user-data` in
+`cloud-init/` becomes a base64 MIME multipart document: the first part is the
+baked cloud-config, the second the user overlay, whose `Merge-Type` header
+selects `list(append)+dict(no_replace,recurse_list)+str()`. `cloud-init` runs
+while the base image is built, so overlay edits apply to the next base build.
+
 ## Module Map
 
 | File | Responsibility |
 |-|-|
-| `claude-vm` | CLI entry point, command dispatch |
+| `lib/cloud-init.sh` | Cloud-init ISO generation, flavor-specific packages/runcmd, user overlay merge |
 | `lib/config.sh` | Config loading, defaults, flavor registry, path helpers |
 | `lib/build.sh` | Base image download, provisioning, prerequisites check |
 | `lib/cloud-init.sh` | Cloud-init ISO generation, flavor-specific packages/runcmd |

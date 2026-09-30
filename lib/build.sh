@@ -172,7 +172,8 @@ check_build_prerequisites() {
     # jq parses `qemu-img info --output=json` when validating the provisioned
     # image — without it the build fails at the very end with a misleading
     # "image is suspiciously small" error.
-    for cmd in qemu-system-x86_64 qemu-img curl jq; do
+    # base64 encodes the cloud-init overlay parts (see cloud-init.sh)
+    for cmd in qemu-system-x86_64 qemu-img curl jq base64; do
         if ! command -v "$cmd" &>/dev/null; then
             missing+=("$cmd")
         fi

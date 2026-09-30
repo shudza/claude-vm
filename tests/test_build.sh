@@ -71,7 +71,7 @@ teardown_fake_bin
 
 # ── Test 2: complete toolchain passes ────────────────────────────────────────
 echo "--- Test 2: check_build_prerequisites passes with all tools ---"
-setup_fake_bin qemu-system-x86_64 qemu-img curl genisoimage jq
+setup_fake_bin qemu-system-x86_64 qemu-img curl genisoimage jq base64
 
 output="$(PATH="$FAKE_BIN" check_build_prerequisites 2>&1)"
 rc=$?

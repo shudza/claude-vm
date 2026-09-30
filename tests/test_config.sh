@@ -884,6 +884,217 @@ test_default_cpus_clamped_to_host() {
     _reset_config_env
 }
 
+
+# ─── Cloud-init overlay (claude-vm config set/get/unset cloud-init) ──────────
+# These run the real CLI so the dispatch in cmd_config is exercised, not just
+# the library functions.
+
+CLI="$PROJECT_DIR/claude-vm"
+
+# Run the CLI with an isolated CLAUDE_VM_DIR. Set CLI_EDITOR to supply an editor;
+# leaving it empty also clears EDITOR/VISUAL from the environment, which is the
+# no-editor case.
+# Usage: _cli VMDIR [--stdin TEXT] ARGS...
+_cli() {
+    local vm_dir="$1"; shift
+    local stdin_text=""
+    if [[ "${1:-}" == "--stdin" ]]; then
+        stdin_text="$2"
+        shift 2
+    fi
+
+    local -a env_args=(-u VISUAL)
+    if [[ -n "${CLI_EDITOR:-}" ]]; then
+        env_args+=("EDITOR=$CLI_EDITOR")
+    else
+        env_args+=(-u EDITOR)
+    fi
+    env_args+=("CLAUDE_VM_DIR=$vm_dir" "CLAUDE_VM_CONFIG=$vm_dir/config")
+
+    printf '%s' "$stdin_text" | env "${env_args[@]}" bash "$CLI" "$@" 2>&1
+}
+
+# A fake editor that writes fixed content to the file it is given.
+_fake_editor() {
+    local bin_dir="$1" content="$2"
+    local editor="$bin_dir/editor"
+    cat > "$editor" << EOF
+#!/usr/bin/env bash
+printf '%s' '$content' >> "\$1"
+EOF
+    chmod +x "$editor"
+    echo "$editor"
+}
+
+test_overlay_editor_creates_file_with_template() {
+    local vm="$TEST_DIR/ovl-edit" bin="$TEST_DIR/ovl-edit-bin"
+    rm -rf "$vm" "$bin"; mkdir -p "$bin"
+    local editor
+    # A sentinel that appears nowhere in the scaffold, so the assertion below can
+    # only pass if the editor actually wrote to the file — asserting on
+    # something like "packages:" would also match the scaffold's own commented
+    # "# packages:" example and hide a no-op editor.
+    editor="$(_fake_editor "$bin" 'editor_marker: written-by-editor
+')"
+
+    local out
+    out="$(CLI_EDITOR="$editor" _cli "$vm" config set cloud-init)"
+
+    local overlay="$vm/cloud-init.yaml" ok=true
+    [[ -f "$overlay" ]] || { fail "editor overlay file" "not created"; ok=false; }
+    grep -qx 'editor_marker: written-by-editor' "$overlay" \
+        || { fail "editor content" "editor output missing (editor may not have run)"; ok=false; }
+    # The template scaffold must be present so a user opening a blank file has
+    # something to work from.
+    grep -q 'claude-vm cloud-init overlay' "$overlay" \
+        || { fail "editor scaffold" "template header missing"; ok=false; }
+    grep -q 'Cloud-init overlay saved' <<< "$out" \
+        || { fail "editor output" "no save message: $out"; ok=false; }
+    # cloud-init only runs at provision time, so the user must be told how to
+    # apply the change.
+    grep -qi 'rebase\|base image build' <<< "$out" \
+        || { fail "editor rebuild note" "no rebuild guidance: $out"; ok=false; }
+    $ok && pass "config set cloud-init opens an editor and scaffolds a new overlay"
+}
+
+test_overlay_editor_does_not_re_add_template() {
+    local vm="$TEST_DIR/ovl-edit2" bin="$TEST_DIR/ovl-edit2-bin"
+    rm -rf "$vm" "$bin"; mkdir -p "$bin"
+    local editor
+    editor="$(_fake_editor "$bin" 'editor_marker: written-by-editor
+')"
+
+    CLI_EDITOR="$editor" _cli "$vm" config set cloud-init >/dev/null
+    CLI_EDITOR="$editor" _cli "$vm" config set cloud-init >/dev/null
+
+    local overlay="$vm/cloud-init.yaml" count markers ok=true
+    count="$(grep -c 'claude-vm cloud-init overlay' "$overlay")"
+    # The editor ran on each invocation, so its content is appended twice.
+    markers="$(grep -cx 'editor_marker: written-by-editor' "$overlay")"
+    [[ "$count" == "1" ]] || { fail "template idempotence" "found $count template headers"; ok=false; }
+    [[ "$markers" == "2" ]] || { fail "editor ran twice" "found $markers editor writes"; ok=false; }
+    $ok && pass "re-editing keeps one template header (no duplicate scaffolding)"
+}
+
+test_overlay_import_from_file() {
+    local vm="$TEST_DIR/ovl-import" src="$TEST_DIR/ovl-src.yaml"
+    rm -rf "$vm"; mkdir -p "$vm"
+    printf 'runcmd:\n  - echo hi\n' > "$src"
+
+    local out
+    out="$(_cli "$vm" config set cloud-init "$src")"
+
+    local overlay="$vm/cloud-init.yaml" ok=true
+    cmp -s "$src" "$overlay" || { fail "import content" "imported file differs from source"; ok=false; }
+    grep -q 'Cloud-init overlay saved' <<< "$out" || { fail "import output" "no save message"; ok=false; }
+    $ok && pass "config set cloud-init FILE imports the file verbatim"
+}
+
+test_overlay_import_missing_file_fails() {
+    local vm="$TEST_DIR/ovl-missing" rc=0
+    rm -rf "$vm"; mkdir -p "$vm"
+
+    _cli "$vm" config set cloud-init "$TEST_DIR/does-not-exist.yaml" >/dev/null || rc=$?
+    if (( rc != 0 )); then
+        pass "importing a missing file fails"
+    else
+        fail "import missing file" "expected non-zero exit"
+    fi
+}
+
+test_overlay_import_from_stdin() {
+    local vm="$TEST_DIR/ovl-stdin"
+    rm -rf "$vm"; mkdir -p "$vm"
+
+    _cli "$vm" --stdin $'packages:\n  - ripgrep\n' config set cloud-init - >/dev/null
+
+    if grep -q 'ripgrep' "$vm/cloud-init.yaml" 2>/dev/null; then
+        pass "config set cloud-init - reads the overlay from stdin"
+    else
+        fail "stdin import" "overlay not written"
+    fi
+}
+
+test_overlay_invalid_yaml_is_saved_with_warning() {
+    local vm="$TEST_DIR/ovl-badyaml" src="$TEST_DIR/ovl-bad.yaml"
+    rm -rf "$vm"; mkdir -p "$vm"
+    printf 'packages: [unclosed\n' > "$src"
+
+    local out rc=0
+    out="$(_cli "$vm" config set cloud-init "$src")" || rc=$?
+
+    local ok=true
+    # Saving is non-fatal (the user may be mid-edit), but cloud-init would drop
+    # the part silently, so a warning is mandatory.
+    (( rc == 0 )) || { fail "invalid yaml save" "unexpected failure: $out"; ok=false; }
+    grep -q 'WARNING' <<< "$out" || { fail "invalid yaml warning" "no warning emitted"; ok=false; }
+    [[ -f "$vm/cloud-init.yaml" ]] || { fail "invalid yaml file" "file not saved"; ok=false; }
+    $ok && pass "invalid YAML overlay is saved with a warning"
+}
+
+test_overlay_get_reports_status() {
+    local vm="$TEST_DIR/ovl-get"
+    rm -rf "$vm"; mkdir -p "$vm"
+
+    local notset active ok=true
+    notset="$(_cli "$vm" config get cloud-init)"
+    grep -q "$vm/cloud-init.yaml" <<< "$notset" || { fail "get path" "path not printed"; ok=false; }
+    grep -q 'not set' <<< "$notset" || { fail "get unset status" "got: $notset"; ok=false; }
+
+    printf 'packages:\n  - htop\n' > "$vm/cloud-init.yaml"
+    active="$(_cli "$vm" config get cloud-init)"
+    grep -q 'active' <<< "$active" || { fail "get active status" "got: $active"; ok=false; }
+    $ok && pass "config get cloud-init reports path and status"
+}
+
+test_overlay_unset_confirm_and_cancel() {
+    local vm="$TEST_DIR/ovl-unset"
+    rm -rf "$vm"; mkdir -p "$vm"
+    printf 'packages:\n  - htop\n' > "$vm/cloud-init.yaml"
+
+    # Declining keeps the file.
+    printf 'n\n' | env CLAUDE_VM_DIR="$vm" CLAUDE_VM_CONFIG="$vm/config" \
+        bash "$CLI" config unset cloud-init >/dev/null 2>&1
+    local ok=true
+    [[ -f "$vm/cloud-init.yaml" ]] || { fail "unset cancel" "file removed on decline"; ok=false; }
+
+    # Accepting removes it.
+    printf 'y\n' | env CLAUDE_VM_DIR="$vm" CLAUDE_VM_CONFIG="$vm/config" \
+        bash "$CLI" config unset cloud-init >/dev/null 2>&1
+    [[ -f "$vm/cloud-init.yaml" ]] && { fail "unset confirm" "file survived confirmation"; ok=false; }
+    $ok && pass "config unset cloud-init honours the confirmation prompt"
+}
+
+test_overlay_editor_without_tty_fails_clearly() {
+    local vm="$TEST_DIR/ovl-notty" rc=0
+    rm -rf "$vm"; mkdir -p "$vm"
+
+    # No editor configured and no terminal: the command must fail with guidance
+    # rather than silently doing nothing (or hanging).
+    _cli "$vm" config set cloud-init </dev/null >/dev/null || rc=$?
+    if (( rc != 0 )); then
+        pass "config set cloud-init fails without a tty or editor"
+    else
+        fail "no editor" "expected non-zero exit"
+    fi
+}
+
+test_show_config_reports_overlay() {
+    local vm="$TEST_DIR/ovl-show"
+    rm -rf "$vm"; mkdir -p "$vm"
+
+    local before after ok=true
+    before="$(_cli "$vm" config show)"
+    grep -q 'Cloud-init overlay: not set' <<< "$before" \
+        || { fail "show unset" "got: $(grep -i overlay <<< "$before")"; ok=false; }
+
+    printf 'packages:\n  - htop\n' > "$vm/cloud-init.yaml"
+    after="$(_cli "$vm" config show)"
+    grep -q "Cloud-init overlay: $vm/cloud-init.yaml" <<< "$after" \
+        || { fail "show set" "got: $(grep -i overlay <<< "$after")"; ok=false; }
+    $ok && pass "config show reports the cloud-init overlay"
+}
+
 # ─── Run ──────────────────────────────────────────────────────────────────────
 
 echo "=== claude-vm config tests ==="
@@ -916,6 +1127,16 @@ run_test test_default_flavor_is_debian_slim
 run_test test_flavor_normalization
 run_test test_set_config_flavor_values
 run_test test_base_image_path_is_flavor_keyed
+run_test test_overlay_editor_creates_file_with_template
+run_test test_overlay_editor_does_not_re_add_template
+run_test test_overlay_import_from_file
+run_test test_overlay_import_missing_file_fails
+run_test test_overlay_import_from_stdin
+run_test test_overlay_invalid_yaml_is_saved_with_warning
+run_test test_overlay_get_reports_status
+run_test test_overlay_unset_confirm_and_cancel
+run_test test_overlay_editor_without_tty_fails_clearly
+run_test test_show_config_reports_overlay
 
 echo ""
 echo "Results: ${TESTS_PASSED} passed, ${TESTS_FAILED} failed, ${TESTS_RUN} total"

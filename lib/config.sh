@@ -110,6 +110,22 @@ CLOUD_INIT_DIR="$CLAUDE_VM_DIR/cloud-init"
 RUN_DIR="$CLAUDE_VM_DIR/run"
 BACKUPS_DIR="$CLAUDE_VM_DIR/backups"
 
+# User cloud-init overlay. When this file holds real content its contents are
+# merged into the base image's cloud-init user-data as an extra cloud-config
+# part (see cloud-init.sh). Managed by:
+#   claude-vm config set cloud-init
+CLOUD_INIT_USER_FILE="$CLAUDE_VM_DIR/cloud-init.yaml"
+
+# True when the overlay holds at least one real (non-comment, non-blank) line.
+# A comments-only file is the untouched scaffold and is inert: shipping it would
+# make cloud-init record a part error for a no-op overlay and stamp a
+# schema-error marker into the merged config. Shared by the overlay pipeline and
+# show_config so both agree on what "set" means.
+cloud_init_overlay_has_content() {
+    [[ -f "$CLOUD_INIT_USER_FILE" ]] || return 1
+    grep -qE -v '^[[:space:]]*(#|$)' "$CLOUD_INIT_USER_FILE" 2>/dev/null
+}
+
 # Builtin CPU default: DEFAULT_CPUS, clamped to the host's core count so a
 # small host is never overcommitted by the default. Claude Code's subagent /
 # workflow fan-out scales with the guest's nproc, so the default errs high.
@@ -193,6 +209,13 @@ show_config() {
         echo "# Status: loaded"
     else
         echo "# Status: not found (using defaults)"
+    fi
+    if cloud_init_overlay_has_content; then
+        echo "# Cloud-init overlay: $CLOUD_INIT_USER_FILE (merged into base user-data)"
+    elif [[ -f "$CLOUD_INIT_USER_FILE" ]]; then
+        echo "# Cloud-init overlay: $CLOUD_INIT_USER_FILE (empty — ignored)"
+    else
+        echo "# Cloud-init overlay: not set"
     fi
     echo ""
     echo "FLAVOR=\"$FLAVOR\""

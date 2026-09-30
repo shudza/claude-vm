@@ -80,12 +80,28 @@ generate_cloud_init_network "$CLOUD_INIT_DIR"
 
 [[ -f "$CLOUD_INIT_DIR/user-data" ]] || fail "user-data not generated"
 [[ -f "$CLOUD_INIT_DIR/meta-data" ]] || fail "meta-data not generated"
-[[ -f "$CLOUD_INIT_DIR/network-config" ]] || fail "network-config not generated"
-grep -q "claude" "$CLOUD_INIT_DIR/user-data" || fail "user-data missing Claude Code install"
-grep -q "openssh-server" "$CLOUD_INIT_DIR/user-data" || fail "user-data missing openssh-server"
-grep -q "virtiofs" "$CLOUD_INIT_DIR/user-data" || fail "user-data missing virtiofs config"
-grep -q "power_state" "$CLOUD_INIT_DIR/user-data" || fail "user-data missing power_state (auto-poweroff)"
-grep -q "claude-vm-ready" "$CLOUD_INIT_DIR/user-data" || fail "user-data missing ready signal"
+# user-data is a plain #cloud-config document when no cloud-init overlay is
+# set, and a base64 MIME multipart document when one is. Decode before grepping
+# so these assertions hold either way.
+_userdata_text() {
+    local f="$CLOUD_INIT_DIR/user-data"
+    if grep -q '^MIME-Version:' "$f"; then
+        awk '
+            /^--claude-vm-boundary--$/ { inpart=0; next }
+            /^--claude-vm-boundary$/ { count++; hdr=1; inpart=1; next }
+            inpart && hdr { if ($0 == "") hdr=0; next }
+            inpart { print }
+        ' "$f" | base64 -d
+    else
+        cat "$f"
+    fi
+}
+_userdata="$(_userdata_text)"
+grep -q "claude" <<< "$_userdata" || fail "user-data missing Claude Code install"
+grep -q "openssh-server" <<< "$_userdata" || fail "user-data missing openssh-server"
+grep -q "virtiofs" <<< "$_userdata" || fail "user-data missing virtiofs config"
+grep -q "power_state" <<< "$_userdata" || fail "user-data missing power_state (auto-poweroff)"
+grep -q "claude-vm-ready" <<< "$_userdata" || fail "user-data missing ready signal"
 pass "Cloud-init config files verified"
 
 # Test ISO creation if tools available

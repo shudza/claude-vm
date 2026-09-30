@@ -42,7 +42,7 @@ carry over; local-scoped (`projects["<host-path>"]`) don't — the VM mounts at 
 | `claude-vm` | CLI entry point, command dispatch |
 | `lib/config.sh` | Config loading, defaults, flavor registry, path helpers |
 | `lib/build.sh` | Base image download, cloud-init provisioning, prereq checks |
-| `lib/cloud-init.sh` | Cloud-init ISO generation, flavor-specific packages/runcmd |
+| `lib/cloud-init.sh` | Cloud-init ISO generation, flavor-specific packages/runcmd, user overlay merge |
 | `lib/launch.sh` | VM launch, SSH connection, virtiofsd start, config sync |
 | `lib/shutdown.sh` | Graceful shutdown, state save, cleanup |
 | `lib/snapshot.sh` | Linked snapshot creation, backing chain verification, deletion |
@@ -72,6 +72,21 @@ in `config.sh` (keyed by distro; slim/full share the image) → distro cases in
 
 **Adding a config key:** `DEFAULT_*` constant in `config.sh` → handle in `load_config` →
 validate in `set_config_value` → add to `get` case in `claude-vm`
+
+**User cloud-init overlay:** `~/.claude-vm/cloud-init.yaml` is merged into the
+generated user-data as a second base64 MIME `text/cloud-config` part, with
+`Merge-Type: list(append)+dict(no_replace,recurse_list)+str()`: list keys are
+appended and a key the baked config already sets keeps the baked value, so the
+overlay can only add (cloud-init's own default replaces lists index-wise, and
+`dict(replace)` would let an overlay `users:` drop the baked user and its SSH
+key). Managed by
+`claude-vm config set|get|unset cloud-init`. Appending `---` to the user-data
+document is NOT equivalent — `yaml.safe_load` rejects multi-document streams and
+cloud-init then drops the whole *part*, baked config included. The overlay is
+validated before it is shipped; a part cloud-init cannot parse is discarded with
+only a log line, so an invalid overlay fails the build instead. Any change needs
+a base rebuild (`rebase` / `build --force`) since cloud-init runs at provision
+time.
 
 ## Testing
 

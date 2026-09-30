@@ -23,6 +23,7 @@ source "$LIB_DIR/config.sh"
 source "$LIB_DIR/build.sh"
 source "$LIB_DIR/launch.sh"
 source "$LIB_DIR/rebase.sh"
+source "$LIB_DIR/cloud-init.sh"
 
 # Show usage information
 usage() {
@@ -48,6 +49,9 @@ Usage:
   claude-vm config set KEY VAL        Set a config value (e.g., VM_RAM=8G)
   claude-vm config get KEY            Get a config value
   claude-vm config edit               Open config file in $EDITOR
+  claude-vm config set cloud-init     Edit the cloud-init overlay in $EDITOR
+  claude-vm config set cloud-init FILE Import an overlay file ('-' for stdin)
+  claude-vm config get cloud-init     Show overlay path and status
   claude-vm rebase [--force] [--yes]  Rebuild base image, migrate VM state
   claude-vm help                      Show this help
 
@@ -100,6 +104,16 @@ cmd_config() {
             show_config
             ;;
         set)
+            # cloud-init overlay: no value opens an editor, a value imports.
+            if [[ "${1:-}" == cloud-init ]]; then
+                shift
+                if [[ $# -ge 1 ]]; then
+                    cloud_init_overlay_import "$1" || return $?
+                else
+                    cloud_init_overlay_edit || return $?
+                fi
+                return 0
+            fi
             if [[ $# -lt 2 ]]; then
                 # Support KEY=VALUE format
                 if [[ $# -eq 1 && "$1" == *=* ]]; then
@@ -116,6 +130,10 @@ cmd_config() {
             fi
             ;;
         get)
+            if [[ "${1:-}" == cloud-init ]]; then
+                cloud_init_overlay_status
+                return 0
+            fi
             if [[ $# -lt 1 ]]; then
                 echo "Usage: claude-vm config get KEY" >&2
                 return 1
@@ -139,6 +157,14 @@ cmd_config() {
                     ;;
             esac
             ;;
+        unset)
+            if [[ "${1:-}" == cloud-init ]]; then
+                cloud_init_overlay_unset || return $?
+                return 0
+            fi
+            echo "Usage: claude-vm config unset cloud-init" >&2
+            return 1
+            ;;
         edit)
             load_config
             ensure_dirs
@@ -156,14 +182,22 @@ DEFAULTS
             "${EDITOR:-vi}" "$CLAUDE_VM_CONFIG"
             ;;
         --help|-h)
-            echo "Usage: claude-vm config [show|set|get|edit]"
+            echo "Usage: claude-vm config [show|set|get|unset|edit]"
             echo ""
-            echo "  show              Show effective configuration (default)"
-            echo "  set KEY VALUE     Set a config value"
-            echo "  get KEY           Get a config value"
-            echo "  edit              Open config file in \$EDITOR"
+            echo "  show                   Show effective configuration (default)"
+            echo "  set KEY VALUE          Set a config value"
+            echo "  get KEY                Get a config value"
+            echo "  unset cloud-init       Remove the cloud-init overlay"
+            echo "  edit                   Open config file in \$EDITOR"
             echo ""
-            echo "Keys: FLAVOR, VM_USER, VM_RAM, VM_CPUS, SSH_PORT_BASE, BASE_IMAGE_URL, BASE_IMAGE_NAME, FORWARD_PORTS, CLAUDE_ARGS, REBASE_BACKUP_PATHS"
+            echo "  set cloud-init [FILE]  Open the cloud-init overlay in \$EDITOR,"
+            echo "                         or import FILE ('-' reads stdin). The overlay"
+            echo "                         is merged into the base image's user-data and"
+            echo "                         takes effect on the next base image build"
+            echo "                         (claude-vm rebase / build --force)."
+            echo "  get cloud-init         Show the overlay path and status"
+            echo ""
+            echo "Config file keys: FLAVOR, VM_USER, VM_RAM, VM_CPUS, SSH_PORT_BASE, BASE_IMAGE_URL, BASE_IMAGE_NAME, FORWARD_PORTS, CLAUDE_ARGS, REBASE_BACKUP_PATHS"
             ;;
         *)
             echo "Unknown config subcommand: $subcmd" >&2

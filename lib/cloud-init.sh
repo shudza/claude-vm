@@ -179,6 +179,337 @@ power_state:
   condition: true
 
 USERDATA
+
+    _cloud_init_append_overlay "$output_dir/user-data"
+}
+
+# ── User cloud-init overlay ──────────────────────────────────────────────────
+# The user can extend the baked cloud-config with ~/.claude-vm/cloud-init.yaml
+# (managed by: claude-vm config set cloud-init). The overlay is shipped as an
+# extra cloud-config part of a MIME multipart user-data document.
+#
+# It is deliberately NOT appended to the same YAML document after a "---"
+# separator: cloud-init parses a part with yaml.safe_load, which accepts a
+# single document only, so a second document makes the whole part unparseable
+# and cloud-init discards it — taking the baked users, SSH key, packages and
+# runcmd with it. MIME multipart is the supported way to send several
+# cloud-config parts in one user-data blob.
+
+# True when the overlay holds at least one real (non-comment, non-blank) line.
+# A comments-only file is the untouched scaffold and is inert: shipping it would
+# make cloud-init record a part error ("empty cloud config") for a no-op overlay
+# and stamp a schema-error marker into the merged config. The predicate lives in
+# config.sh so show_config reports the same thing.
+cloud_init_overlay_active() {
+    cloud_init_overlay_has_content
+}
+
+# Path of the user overlay (CLOUD_INIT_USER_FILE from config.sh)
+_cloud_init_overlay_file() {
+    echo "${CLOUD_INIT_USER_FILE:-${CLAUDE_VM_DIR:-$HOME/.claude-vm}/cloud-init.yaml}"
+}
+
+# Merge type applied to the overlay part.
+#
+# cloud-init's own default is dict(replace)+list()+str(). Both halves are wrong
+# here:
+#   - m_list with no op falls back to "replace", which merges index-wise: the
+#     overlay's first runcmd entry would OVERWRITE the baked first entry.
+#   - m_dict's default is already no_replace, but spelling it out makes the
+#     intent explicit and guards against a future default change.
+# list(append) concatenates, and dict(no_replace) means a key the baked config
+# already sets keeps the baked value. That is deliberate: real `replace` would
+# let an overlay `users:` list drop the baked user and its authorized SSH key,
+# leaving a VM that cannot be reached. recurse_list makes list-valued keys
+# nested in dicts (users, write_files) append too.
+# Users can override a baked scalar from their own overlay by setting
+# merge_how: in it — a payload merge_how is popped out of the payload and takes
+# precedence over this header.
+_CLOUD_INIT_OVERLAY_MERGE_TYPE="list(append)+dict(no_replace,recurse_list)+str()"
+
+# Parse the overlay exactly as cloud-init will: it hands the part payload to
+# yaml.safe_load and requires a mapping, and a part it cannot load is dropped
+# with only a log line. Prints the reason on stderr when the overlay is unusable.
+_cloud_init_overlay_parse_error() {
+    local file="$1"
+    python3 - "$file" << 'PARSE' 2>&1
+import sys
+
+import yaml
+
+try:
+    doc = yaml.safe_load(open(sys.argv[1], "rb"))
+except yaml.YAMLError as exc:
+    print(exc)
+    sys.exit(1)
+
+if doc is not None and not isinstance(doc, dict):
+    print(
+        "root of the document is %s, but cloud-config must be a mapping of keys"
+        % type(doc).__name__
+    )
+    sys.exit(2)
+PARSE
+}
+
+# Reason the overlay cannot be used, or empty output when it is usable.
+# Always exits 0: the reason is the output, not the status, so callers key on
+# empty-vs-nonempty. Returning the parser's status here would make a command
+# substitution assignment "fail", and callers would read that as "no problem".
+_cloud_init_overlay_unusable_reason() {
+    _cloud_init_overlay_parse_error "$1" || true
+}
+
+# Non-fatal YAML validation: cloud-init discards a part it cannot parse, so a
+# typo silently drops the overlay. Reported as a warning at save time; the
+# build fails instead (see _cloud_init_overlay_require_valid).
+_cloud_init_warn_if_overlay_invalid() {
+    local file="$1"
+    [[ -f "$file" ]] || return 0
+    command -v python3 >/dev/null 2>&1 || return 0
+    python3 -c 'import yaml' >/dev/null 2>&1 || return 0
+
+    local err
+    if err="$(_cloud_init_overlay_unusable_reason "$file")" && [[ -n "$err" ]]; then
+        {
+            echo "WARNING: cloud-init cannot use the overlay: $file"
+            echo "$err" | sed 's/^/  /'
+            echo "  cloud-init would silently discard the overlay. It is saved anyway; fix it and rebuild."
+        } >&2
+    fi
+}
+
+# Fail the build when the overlay cannot be parsed. cloud-init logs and skips
+# an unparseable part, then boots anyway — the build would report success with
+# the user's changes missing.
+_cloud_init_overlay_require_valid() {
+    local file="$1"
+    [[ -f "$file" ]] || return 0
+    if ! command -v python3 >/dev/null 2>&1 || ! python3 -c 'import yaml' >/dev/null 2>&1; then
+        echo "WARNING: python3 + PyYAML unavailable — skipping overlay validation" >&2
+        return 0
+    fi
+
+    local err
+    if err="$(_cloud_init_overlay_unusable_reason "$file")" && [[ -n "$err" ]]; then
+        echo "ERROR: cloud-init cannot use the overlay: $file" >&2
+        echo "$err" >&2
+        return 1
+    fi
+}
+
+# Wrap a generated user-data file together with the user overlay in a MIME
+# multipart document. No-op when the overlay is unset, so an untouched user-data
+# stays byte-identical to a build without the feature.
+_cloud_init_append_overlay() {
+    local user_data="$1"
+    local file
+    file="$(_cloud_init_overlay_file)"
+
+    cloud_init_overlay_active || return 0
+    _cloud_init_overlay_require_valid "$file" || return $?
+
+    local boundary="claude-vm-boundary" part1
+    part1="$user_data.baked"
+    if ! mv "$user_data" "$part1"; then
+        # e.g. a bind-mounted or permission-restricted output dir
+        cp "$user_data" "$part1" || return $?
+        : > "$user_data"
+    fi
+
+    {
+        echo "MIME-Version: 1.0"
+        echo "Content-Type: multipart/mixed; boundary=\"$boundary\""
+        echo ""
+        _cloud_init_mime_part "$boundary" "$part1"
+        _cloud_init_mime_part "$boundary" "$file" \
+            "Merge-Type: $_CLOUD_INIT_OVERLAY_MERGE_TYPE"
+        echo "--$boundary--"
+    } > "$user_data"
+
+    rm -f "$part1"
+}
+# Emit one base64-encoded MIME part. $3 is an optional extra header line.
+#
+# The payload is the source file byte-for-byte. Nothing is injected into it: a
+# prepended merge_how: line (or a rewritten leading document marker) would turn
+# an overlay that starts with "---" into two YAML documents, which yaml.safe_load
+# rejects — dropping the whole part. The merge type travels in the Merge-Type
+# header instead, which cloud-init's handler reads alongside the payload
+# (cloudinit/handlers/cloud_config.py:_extract_mergers).
+#
+# base64 is not decoration either: cloud-init decodes a part's bytes to str via
+# latin-1 and then decodes that str again with the part's declared charset, so a
+# non-ASCII byte in a plain part becomes an unparseable surrogate and the part is
+# dropped (the baked config has em dashes in its comments). A base64 body is pure
+# ASCII, survives that round trip byte-exactly, and can never contain the
+# boundary or a line that reads as a header.
+_cloud_init_mime_part() {
+    local boundary="$1" file="$2" extra_header="${3:-}"
+    echo "--$boundary"
+    echo "Content-Type: text/cloud-config; charset=\"utf-8\""
+    echo "Content-Transfer-Encoding: base64"
+    [[ -n "$extra_header" ]] && echo "$extra_header"
+    echo ""
+    base64 < "$file"
+}
+
+
+# ── Overlay management (claude-vm config set cloud-init) ─────────────────────
+
+# Scaffolding for a new overlay. Comments only: an untouched template is
+# inert (cloud_init_overlay_active ignores whitespace-only files).
+_cloud_init_overlay_write_template() {
+    local file="$1"
+    mkdir -p "$(dirname "$file")"
+    cat > "$file" << 'TEMPLATE'
+# claude-vm cloud-init overlay
+#
+# Extends the cloud-init config baked into the base image. It is merged as an
+# extra cloud-config part, so it can only ADD:
+#   - list values (runcmd, packages, write_files) are APPENDED to the baked ones
+#   - keys the baked config already sets keep the baked value
+#   - new keys are added as written
+# The sandbox's own setup (user, SSH key, virtiofs mount, installers) therefore
+# always survives.
+#
+# Takes effect when the base image is (re)built:
+#   claude-vm rebase          # rebuild + migrate existing VMs
+#   claude-vm build --force   # rebuild this flavor's base image only
+#
+# Note /tmp is a tmpfs in the guest, so anything written there during
+# provisioning does not survive into the running VM. Write to a real path.
+#
+# Examples:
+#
+# packages:
+#   - ripgrep
+#   - jq
+#
+# runcmd:
+#   - install -d /usr/local/share/claude-vm
+#   - echo hello > /usr/local/share/claude-vm/overlay-ran
+#
+# write_files:
+#   - path: /etc/claude-vm-extra.conf
+#     content: |
+#       key = value
+#     permissions: '0644'
+TEMPLATE
+}
+
+# Open the overlay in an editor, creating the template when unset.
+cloud_init_overlay_edit() {
+    local file
+    file="$(_cloud_init_overlay_file)"
+
+    if [[ ! -s "$file" ]]; then
+        _cloud_init_overlay_write_template "$file"
+    fi
+
+    local editor="${VISUAL:-${EDITOR:-}}"
+    if [[ -z "$editor" ]]; then
+        if [[ ! -t 0 && ! -t 1 ]]; then
+            echo "No editor available: set \$EDITOR/\$VISUAL, or import a file with:" >&2
+            echo "  claude-vm config set cloud-init <file>" >&2
+            return 1
+        fi
+        editor="vi"
+    fi
+
+    # Unquoted so an editor value carrying arguments ("code -w") works.
+    # shellcheck disable=SC2086
+    $editor "$file" || return $?
+
+    if ! cloud_init_overlay_active; then
+        echo "Cloud-init overlay is empty — nothing will be merged: $file"
+        return 0
+    fi
+
+    _cloud_init_warn_if_overlay_invalid "$file"
+    echo "Cloud-init overlay saved: $file"
+    cloud_init_overlay_rebuild_note
+}
+
+# Import an overlay from a file, or from stdin when the source is "-".
+cloud_init_overlay_import() {
+    local src="$1"
+    local file
+    file="$(_cloud_init_overlay_file)"
+
+    if [[ "$src" == "-" ]]; then
+        mkdir -p "$(dirname "$file")"
+        cat > "$file"
+    else
+        if [[ ! -f "$src" ]]; then
+            echo "No such file: $src" >&2
+            return 1
+        fi
+        if [[ ! -r "$src" ]]; then
+            echo "Not readable: $src" >&2
+            return 1
+        fi
+        mkdir -p "$(dirname "$file")"
+        cp "$src" "$file"
+    fi
+
+    if ! cloud_init_overlay_active; then
+        echo "Cloud-init overlay is empty — nothing will be merged: $file"
+        return 0
+    fi
+
+    _cloud_init_warn_if_overlay_invalid "$file"
+    echo "Cloud-init overlay saved: $file"
+    cloud_init_overlay_rebuild_note
+}
+
+# Remove the overlay after confirmation.
+cloud_init_overlay_unset() {
+    local file
+    file="$(_cloud_init_overlay_file)"
+
+    if [[ ! -f "$file" ]]; then
+        echo "No cloud-init overlay set: $file"
+        return 0
+    fi
+
+    local confirm
+    read -rp "Remove $file? [y/N] " confirm
+    if [[ "$confirm" != [yY] ]]; then
+        echo "Cancelled."
+        return 0
+    fi
+
+    rm -f "$file"
+    echo "Cloud-init overlay removed: $file"
+}
+
+# Report where the overlay lives and whether it is in effect.
+cloud_init_overlay_status() {
+    local file
+    file="$(_cloud_init_overlay_file)"
+
+    echo "$file"
+    if cloud_init_overlay_active; then
+        echo "status: active ($(wc -l < "$file" | tr -d ' ') lines, merged into the base user-data)"
+    elif [[ -f "$file" ]]; then
+        echo "status: empty — ignored"
+    else
+        echo "status: not set"
+    fi
+}
+
+# Note that existing base images predate an overlay change.
+cloud_init_overlay_rebuild_note() {
+    local base
+    for base in "$BASE_IMAGES_DIR"/base*.qcow2; do
+        [[ -f "$base" ]] || continue
+        echo "Note: cloud-init runs at base image provision time. Existing base"
+        echo "      images are unaffected — run 'claude-vm rebase' (or 'claude-vm"
+        echo "      build --force') to apply this to the next build."
+        return 0
+    done
+    echo "Note: applies to the next base image build ('claude-vm build')."
 }
 
 # ── Flavor-specific helpers ──────────────────────────────────────────────────
@@ -587,11 +918,12 @@ create_cloud_init_iso() {
     local output_dir="$1"
     local iso_path="$2"
 
-    generate_cloud_init_userdata "$output_dir"
+    generate_cloud_init_userdata "$output_dir" || return $?
     generate_cloud_init_metadata "$output_dir"
     generate_cloud_init_network "$output_dir"
 
-    # Create ISO with cloud-init data
+    # genisoimage consumes these loose files; the guest reads user-data out of
+    # the cidata ISO, not from beside it.
     if command -v genisoimage &>/dev/null; then
         genisoimage -output "$iso_path" -volid cidata -joliet -rock \
             "$output_dir/user-data" \

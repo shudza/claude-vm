@@ -111,6 +111,7 @@ claude-vm config set SSH_PORT_BASE 10022
 claude-vm config set FORWARD_PORTS "8080,3000:3000"   # per-project
 claude-vm config set CLAUDE_ARGS "--dangerously-skip-permissions --model sonnet"
 claude-vm config set REBASE_BACKUP_PATHS "/etc/ssh,~/.ssh"   # extra paths kept through rebase
+claude-vm config set cloud-init                    # edit the cloud-init overlay
 ```
 
 Or edit directly:
@@ -126,6 +127,34 @@ CLAUDE_ARGS="--dangerously-skip-permissions --model sonnet"
 ```
 
 Environment variables override config: `VM_RAM=16G claude-vm`. `FORWARD_PORTS` is stored per project (sidecar file), see [docs/usage.md](docs/usage.md#port-forwarding) for spec formats.
+
+### Cloud-init overlay
+
+Extend what a base image gets at build time by adding to the generated
+cloud-config instead of editing it:
+
+```bash
+claude-vm config set cloud-init              # scaffold ~/.claude-vm/cloud-init.yaml, open $EDITOR
+claude-vm config set cloud-init extra.yaml   # or import a file ('-' reads stdin)
+```
+
+```yaml
+# ~/.claude-vm/cloud-init.yaml
+packages:
+  - ripgrep
+runcmd:
+  - install -d /usr/local/share/claude-vm
+  - echo "hello from the overlay" > /usr/local/share/claude-vm/overlay-ran
+```
+
+The overlay can only add: list keys (`runcmd`, `packages`, `write_files`, ...)
+are appended to the baked ones and a key the baked config already sets keeps the
+baked value, so it never displaces the entries that make the sandbox work.
+Cloud-init runs once while the base image is built, so the overlay takes effect
+on the next build — `claude-vm rebase` or `claude-vm build --force`. An overlay
+cloud-init could not parse (invalid YAML, several documents, a non-mapping root)
+is refused rather than silently dropped; see
+[docs/usage.md](docs/usage.md#cloud-init-overlay).
 
 ## Flavors
 

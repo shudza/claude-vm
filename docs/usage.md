@@ -254,7 +254,76 @@ claude-vm config set VM_RAM 8G    # Set a value
 claude-vm config set VM_RAM=8G    # Alternative syntax
 claude-vm config get VM_RAM       # Get a value
 claude-vm config edit             # Open config file in $EDITOR
+claude-vm config set cloud-init   # Edit the cloud-init overlay in $EDITOR
+claude-vm config get cloud-init   # Show overlay path and status
+claude-vm config unset cloud-init # Remove the overlay
 ```
+
+### Cloud-init overlay
+
+Extend the provisioning a base image gets at build time. `claude-vm` generates
+the cloud-config that creates the VM user, authorizes the SSH key, installs the
+tool set, mounts `/workspace` over virtiofs and installs Claude Code; the
+overlay is merged on top as a second cloud-config document.
+
+```bash
+claude-vm config set cloud-init              # scaffold the file, open $EDITOR
+claude-vm config set cloud-init extra.yaml   # import an existing file
+claude-vm config set cloud-init -            # read it from stdin
+claude-vm config get cloud-init              # path + status
+claude-vm config unset cloud-init            # remove it
+```
+
+The file lives at `~/.claude-vm/cloud-init.yaml` (override the directory with
+`CLAUDE_VM_DIR`) and is flavor-independent. It is the standard
+[cloud-config](https://cloud-init.io/) format: a mapping of top-level keys such
+as `packages`, `runcmd`, `write_files`, `apt`, `users` or `growpart`.
+
+```yaml
+# ~/.claude-vm/cloud-init.yaml
+packages:
+  - ripgrep
+  - jq
+
+runcmd:
+  - install -d /usr/local/share/claude-vm
+  - echo "hello from the overlay" > /usr/local/share/claude-vm/overlay-ran
+
+write_files:
+  - path: /etc/claude-vm-extra.conf
+    content: |
+      key = value
+    permissions: '0644'
+```
+
+Semantics:
+
+- **Additive.** The overlay can only add. List keys (`runcmd`, `packages`,
+  `write_files`, ...) are appended to the baked ones, and a key the baked config
+  already sets keeps the baked value — so the overlay can never displace the
+  entries that make the sandbox work (guest user, authorized SSH key, virtiofs
+  mount, installer `runcmd`). New keys are added as written.
+- **Applies at provision time.** Cloud-init runs once, while the base image is
+  being built, so an edited overlay takes effect on the next build:
+  `claude-vm rebase` (rebuild + migrate existing VMs) or
+  `claude-vm build --force`. Existing snapshots keep the provisioning they were
+  created from until they are rebased or reset.
+- **Validated.** The overlay must be a single YAML document whose root is a
+  mapping. `config set` saves an overlay cloud-init could not load (invalid
+  YAML, several documents, or a non-mapping root such as a bare command line)
+  but warns about it — the file may be mid-edit — while the next base build
+  `rebase`/`build` refuses to run. That check exists because cloud-init drops a
+  part it cannot parse and the build would otherwise report success with your
+  changes missing.
+- **Unset is the default.** With no overlay file (or an empty one) the
+  generated cloud-init is byte-identical to a build without the feature.
+
+The generated user-data is a base64 MIME multipart document: one part for the
+baked config and one for the overlay, whose `Merge-Type` header selects
+`list(append)+dict(no_replace,recurse_list)+str()`. Base64 keeps non-ASCII
+overlay content intact and guarantees the overlay text cannot collide with MIME
+structure. Be aware `/tmp` is a tmpfs in the guest: anything a `runcmd` writes
+there during provisioning is gone by the time the VM runs.
 
 ## Configuration
 
