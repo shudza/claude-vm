@@ -439,6 +439,7 @@ launch_vm() {
     local project_dir="${1:-$PWD}"
     shift 2>/dev/null || true
     local claude_extra_args=("$@")
+    local no_attach="${LAUNCH_NO_ATTACH:-false}"
 
     load_config
     ensure_dirs
@@ -450,10 +451,15 @@ launch_vm() {
     local is_new_vm=false
     [[ ! -f "$snap_path" ]] && is_new_vm=true
 
-    # Check if VM is already running — attach another Claude Code instance
+    # Check if VM is already running — attach to it, or report and exit when
+    # asked not to attach (claude-vm start)
     if is_vm_running "$project_dir"; then
         local ssh_port
         ssh_port="$(get_project_ssh_port "$project_dir")"
+        if [[ "$no_attach" == true ]]; then
+            ui_info "VM already running (SSH port: $ssh_port)"
+            return 0
+        fi
         ui_info "Attaching to running VM..."
         connect_vm "$ssh_port" "$project_dir" "${claude_extra_args[@]}"
     fi
@@ -547,7 +553,11 @@ launch_vm() {
         ui_phase "Restoring VM state from rebase" _restore_one_vm "$project_dir" "$ssh_port"
     fi
 
-    # Drop into Claude Code
+    # Drop into Claude Code, or report readiness without attaching (start)
+    if [[ "$no_attach" == true ]]; then
+        ui_done "VM ready (SSH port: $ssh_port) — run 'claude-vm ssh' to attach"
+        return 0
+    fi
     connect_vm "$ssh_port" "$project_dir" "${claude_extra_args[@]}"
 }
 

@@ -51,6 +51,17 @@ claude-vm launch /path/to/project
 claude-vm launch /path/to/project -- --model sonnet   # With extra claude args
 ```
 
+### `claude-vm start`
+
+Start a sandbox and return to your shell — no Claude Code is opened. Use it to bring the VM up before a first `claude-vm ssh`, or to keep your host shell free while the VM runs.
+
+```bash
+claude-vm start                    # start the current project's VM
+claude-vm start /path/to/project   # start a specific project's VM
+```
+
+If the VM is already running, `start` reports its SSH port and exits without attaching.
+
 ### `claude-vm ssh`
 
 Open a plain shell (no Claude Code) in the running VM, or run a one-shot command.

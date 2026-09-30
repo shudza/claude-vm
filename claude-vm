@@ -33,6 +33,7 @@ Usage:
   claude-vm [-- ARGS...]              Launch sandbox and enter Claude Code
   claude-vm build [--flavor X]        Build (or rebuild) the base image
   claude-vm launch [DIR] [-- ARGS...] Launch sandbox for a specific directory
+  claude-vm start [DIR]               Start the sandbox without entering Claude Code
   claude-vm ssh [DIR] [-- CMD...]     SSH into the sandbox; run CMD if given
   claude-vm cp SRC DST                Copy a host file/dir into the VM (. = /workspace)
   claude-vm stop                      Stop the running sandbox (preserves snapshot)
@@ -248,6 +249,18 @@ cmd_launch() {
         fi
     done
     launch_vm "$project_dir" "${claude_args[@]}"
+}
+
+# Start command — start the sandbox without attaching to Claude Code
+# Args: [DIR]
+cmd_start() {
+    local project_dir="$PWD"
+    for arg in "$@"; do
+        [[ "$arg" == "--" ]] && break
+        project_dir="$arg"
+    done
+    LAUNCH_NO_ATTACH=true
+    launch_vm "$project_dir"
 }
 
 # SSH command
@@ -739,6 +752,9 @@ main() {
             ;;
         build)
             cmd_build "$@"
+            ;;
+        start)
+            cmd_start "$@"
             ;;
         config)
             cmd_config "$@"

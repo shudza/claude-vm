@@ -13,6 +13,7 @@
 # 10. sync_claude_config_to_vm includes agents/commands/workflows/keybindings
 # 11. sync_claude_config_to_vm syncs ~/.config/glab-cli/
 # 12. host ~/.claude.json syncs to ~/.claude/.claude.json (CLAUDE_CONFIG_DIR location)
+# 13. launch_vm with LAUNCH_NO_ATTACH=true skips the connect step (issue #10)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -473,6 +474,48 @@ else
 fi
 
 rm -rf "$FAKE_BIN" "$FAKE_HOME"
+teardown_test_env
+
+# ── Test: launch_vm no-attach skips the connect step (issue #10) ─────────────
+echo "--- Test 13: launch_vm with LAUNCH_NO_ATTACH=true does not connect ---"
+setup_test_env
+
+NOATTACH_DIR="$(mktemp -d)"
+NOATTACH_PROJECT="$NOATTACH_DIR/app"
+mkdir -p "$NOATTACH_PROJECT"
+NOATTACH_FAKE="$NOATTACH_DIR/bin"
+mkdir -p "$NOATTACH_FAKE"
+NOATTACH_SSH_LOG="$NOATTACH_DIR/ssh.log"
+cat > "$NOATTACH_FAKE/ssh" <<FAKE
+#!/usr/bin/env bash
+echo "ssh \$*" >> "$NOATTACH_SSH_LOG"
+exit 0
+FAKE
+chmod +x "$NOATTACH_FAKE/ssh"
+
+# Force the "VM already running" branch without a real QEMU/virtiofsd.
+is_vm_running() { return 0; }
+get_project_ssh_port() { echo 12345; }
+
+# no-attach: must not open any SSH connection to the guest
+out="$(PATH="$NOATTACH_FAKE:$PATH" LAUNCH_NO_ATTACH=true launch_vm "$NOATTACH_PROJECT" 2>&1)"
+na_rc=$?
+if [[ "$na_rc" -eq 0 ]] && [[ ! -f "$NOATTACH_SSH_LOG" ]]; then
+    pass "no-attach on a running VM does not connect"
+else
+    fail "no-attach on a running VM connected (rc=$na_rc): $out"
+fi
+
+# default: connect_vm runs (ssh invoked) when the flag is absent
+out="$(PATH="$NOATTACH_FAKE:$PATH" launch_vm "$NOATTACH_PROJECT" 2>&1)"
+if [[ -f "$NOATTACH_SSH_LOG" ]] && grep -q "exec claude" "$NOATTACH_SSH_LOG"; then
+    pass "default launch connects to the guest (claude)"
+else
+    fail "default launch did not connect to the guest"
+fi
+
+unset -f is_vm_running get_project_ssh_port
+rm -rf "$NOATTACH_DIR"
 teardown_test_env
 
 # ── Summary ──────────────────────────────────────────────────────────────────
