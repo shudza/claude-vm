@@ -301,10 +301,13 @@ terminal — herdr then offers to install it (this copy is lost on rebase).
 Registration during `start` never prompts. If host and guest herdr versions
 drift apart, run `herdr --remote claude-vm-<name>` once to update the guest.
 
-Shells herdr opens in the guest start in `/workspace` and source
-`~/.claude-vm-env` (written when the VM is created, or added to older VMs on
-their next start) from `~/.bashrc`, so
-`claude` there uses the same transcript directory as `claude-vm` itself.
+Shells herdr opens in the guest source `~/.claude-vm-env` (written when the
+VM is created, or added to older VMs on their next start) from `~/.bashrc`,
+so `claude` there uses the same transcript directory as `claude-vm` itself.
+They start in the home directory — `cd /workspace` first. The guest
+`~/.bashrc` deliberately does not `cd`: Claude Code sources it before every
+Bash tool call, so a `cd` there resets each call to `/workspace` and breaks
+worktrees. Older VMs have that line removed on their next `claude-vm` connect.
 
 ### `claude-vm config`
 

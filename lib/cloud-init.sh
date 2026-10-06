@@ -139,9 +139,6 @@ $prefetch_file
     content: |
       export PATH="\$HOME/.local/bin:\$PATH"
       [ -z "\$COLORTERM" ] && export COLORTERM=truecolor
-      if [ -d /workspace ]; then
-        cd /workspace 2>/dev/null
-      fi
       # Per-project Claude Code env written on first launch, so shells not
       # started by claude-vm (herdr panes, ssh claude-vm-<name>) match it
       $GUEST_ENV_SOURCE_LINE

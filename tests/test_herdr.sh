@@ -226,6 +226,12 @@ test_cloud_init_bakes_host_key_and_env() {
     else
         fail "cloud-init: bashrc" "no source line"
     fi
+    # Claude Code sources ~/.bashrc per Bash call; a cd there undoes its cwd
+    if [[ "$ud" != *'cd /workspace'* ]]; then
+        pass "cloud-init: guest .bashrc does not cd"
+    else
+        fail "cloud-init: bashrc" "still cds to /workspace"
+    fi
 }
 
 test_sync_writes_env_file() {

@@ -45,7 +45,7 @@ base-debian-full.qcow2 (golden image, ~1.5GB)
 8. Verify virtiofs mount in guest (mount test + read/write verification)
 9. Sync host config into guest via rsync (~/.claude/, ~/.gitconfig, ~/.config/gh/, ~/.config/glab-cli/)
 10. If `setup-herdr` was run: assign the VM's alias name, refresh `~/.claude-vm/ssh_config`, and register/enable it in herdr (warn-only)
-11. `exec` into SSH session running Claude Code, with `CLAUDE_CODE_PROJECT_DIR_NAME` set to the sanitized project basename so the guest's transcript dir is `~/.claude/projects/<name>` rather than `-workspace` (`claude-vm ssh` shells get the same export)
+11. `exec` into SSH session running Claude Code, with `CLAUDE_CODE_PROJECT_DIR_NAME` set to the sanitized project basename so the guest's transcript dir is `~/.claude/projects/<name>` rather than `-workspace` (`claude-vm ssh` shells get the same export). The connect prefix also does the `cd /workspace`; the guest `~/.bashrc` must not, since Claude Code sources it before every Bash tool call (older bases' `cd` block is stripped by a guarded command in the prefix)
 
 All output goes to `~/.claude-vm/run/<hash>/launch.log`. In an interactive terminal
 the user sees a single status line that redraws in place per phase (spinner + phase

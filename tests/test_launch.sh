@@ -315,6 +315,31 @@ else
     fail "connect_vm_shell should export the name and exec a login shell: $output"
 fi
 
+# ── Test: the connect prefix strips the old `cd /workspace` .bashrc block ────
+# Claude Code sources ~/.bashrc before every Bash tool call, so the block
+# reset each call's cwd to /workspace (breaking worktrees).
+echo "--- Test 9f: connect prefix removes the old cd /workspace from ~/.bashrc ---"
+BRC_HOME="$(mktemp -d)"
+cat > "$BRC_HOME/.bashrc" <<'BRC'
+export PATH="$HOME/.local/bin:$PATH"
+[ -z "$COLORTERM" ] && export COLORTERM=truecolor
+if [ -d /workspace ]; then
+  cd /workspace 2>/dev/null
+fi
+[ -f "$HOME/.claude-vm-env" ] && . "$HOME/.claude-vm-env"
+BRC
+prefix="$(_guest_env_prefix "$CONN_PROJECT")"
+HOME="$BRC_HOME" sh -c "$prefix true"
+HOME="$BRC_HOME" sh -c "$prefix true"
+if ! grep -q 'workspace' "$BRC_HOME/.bashrc" \
+      && [[ "$(wc -l < "$BRC_HOME/.bashrc")" == 3 ]] \
+      && [[ "$(tail -1 "$BRC_HOME/.bashrc")" == '[ -f "$HOME/.claude-vm-env" ] && . "$HOME/.claude-vm-env"' ]]; then
+    pass "connect prefix strips only the cd block, idempotently"
+else
+    fail "connect prefix should strip the cd block: $(cat "$BRC_HOME/.bashrc")"
+fi
+rm -rf "$BRC_HOME"
+
 # ── Test: connect_vm_shell runs a one-shot command with the guest env ───────
 # (issue #9: `claude-vm ssh "<cmd>"`)
 echo "--- Test 9c: connect_vm_shell runs a one-shot command ---"

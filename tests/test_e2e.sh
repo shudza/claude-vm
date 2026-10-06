@@ -615,8 +615,9 @@ phase_ssh_alias() {
 
     # Interactive shells (herdr panes) pick up the per-project env file
     output=$("${alias_ssh[@]}" claude-vm-project-a 'bash -ic "echo \$CLAUDE_CODE_PROJECT_DIR_NAME:\$PWD"' 2>/dev/null) || true
-    if [[ "$output" == *"project-a:/workspace"* ]]; then
-        pass "guest bashrc: sources ~/.claude-vm-env, starts in /workspace"
+    # ...and must not cd: Claude Code sources ~/.bashrc per Bash tool call
+    if [[ "$output" == "project-a:/home/"* ]]; then
+        pass "guest bashrc: sources ~/.claude-vm-env, leaves the cwd alone"
     else
         fail "guest env file" "output: $output"
     fi
