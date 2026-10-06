@@ -96,6 +96,7 @@ First run builds a base image (2-3 minutes plus the cloud image download), creat
 | `claude-vm status` | Show current project status |
 | `claude-vm show` | Print the full QEMU and SSH commands for this project |
 | `claude-vm config` | Show/set configuration |
+| `claude-vm setup-herdr [--remove]` | `ssh claude-vm-<name>` aliases; show VMs in [herdr](https://herdr.dev) |
 | `claude-vm help` | Show help |
 
 See [docs/usage.md](docs/usage.md) for the full reference with all flags and examples.

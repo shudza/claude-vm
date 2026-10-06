@@ -81,7 +81,7 @@ Quoting follows native `ssh host "cmd"`: quote the *whole* remote command when i
 
 ### Transcript directory inside the VM
 
-Every project mounts at `/workspace`, so by default Claude Code would keep every VM's transcripts under `~/.claude/projects/-workspace`. `claude-vm` sets `CLAUDE_CODE_PROJECT_DIR_NAME` to the project's directory name (restricted to `A-Za-z0-9_-`, max 64 chars — Claude Code silently ignores anything else; `my-app` for `~/code/my-app`), so transcripts land in `~/.claude/projects/my-app` instead. `CLAUDE_CONFIG_DIR` is also set to its default `~/.claude`, because Claude Code only honors the name when a config dir is explicitly set; as a consequence the guest's global config json lives at `~/.claude/.claude.json` (the sync and rebase handle this). To override either, export the variable from `~/.env` inside the VM — it is sourced after the defaults are set. VMs created before this feature are migrated automatically on their next connect: the config json is copied to the new location and `projects/-workspace` is renamed to the project name; if the target directory already exists, entries are merged file-wise without overwriting anything (one-time and idempotent).
+Every project mounts at `/workspace`, so by default Claude Code would keep every VM's transcripts under `~/.claude/projects/-workspace`. `claude-vm` sets `CLAUDE_CODE_PROJECT_DIR_NAME` to the project's directory name (restricted to `A-Za-z0-9_-`, max 64 chars — Claude Code silently ignores anything else; `my-app` for `~/code/my-app`), so transcripts land in `~/.claude/projects/my-app` instead. `CLAUDE_CONFIG_DIR` is also set to its default `~/.claude`, because Claude Code only honors the name when a config dir is explicitly set; as a consequence the guest's global config json lives at `~/.claude/.claude.json` (the sync and rebase handle this). To override either, export the variable from `~/.env` inside the VM — it is sourced after the defaults are set. Shells that `claude-vm` doesn't start itself (herdr panes, `ssh claude-vm-<name>`) get the same two variables from `~/.claude-vm-env`, which the guest `~/.bashrc` sources; it is written when the VM is created. VMs from before this feature get the file and the `.bashrc` line added once, on their first start after `claude-vm setup-herdr`. VMs created before this feature are migrated automatically on their next connect: the config json is copied to the new location and `projects/-workspace` is renamed to the project name; if the target directory already exists, entries are merged file-wise without overwriting anything (one-time and idempotent).
 
 ### `claude-vm cp`
 
@@ -186,7 +186,7 @@ Output:
 Project snapshots:
 
   /home/user/my-project
-    abc123def456  196K  [RUNNING]
+    abc123def456  196K  [RUNNING]  claude-vm-my-project
   /home/user/other-project
     789abc012def  4.2M  [stopped]
 
@@ -242,6 +242,78 @@ qemu-system-x86_64 \
 # SSH command
 ssh -i ~/.claude-vm/keys/id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -p 10022 user@localhost
 ```
+
+### `claude-vm setup-herdr`
+
+Make every VM reachable as `ssh claude-vm-<name>` and show running VMs in
+[herdr](https://herdr.dev) as saved machines. Run it once; it is global, not
+per project.
+
+```bash
+claude-vm setup-herdr            # asks before editing ~/.ssh/config
+claude-vm setup-herdr --yes      # don't ask
+claude-vm setup-herdr --remove   # undo: include line, alias config, herdr machines
+```
+
+herdr only reaches hosts through your OpenSSH config, so setup:
+
+1. writes `~/.claude-vm/ssh_config` — one static `Host claude-vm-*` block whose
+   `ProxyCommand` (`claude-vm proxy %n`) looks up the VM's current SSH port, so
+   nothing is rewritten when ports change;
+2. after asking, adds `Include "~/.claude-vm/ssh_config"` (absolute path) at the
+   **top** of `~/.ssh/config`, backing it up to `~/.ssh/config.claude-vm.bak`
+   (a symlinked config is written through, not replaced). Declining prints the
+   line to add yourself;
+3. registers VMs that are already running.
+
+From then on `claude-vm start`/launch registers the VM (`herdr machine add`) or
+re-enables it, `stop` disables it so herdr doesn't keep retrying, and
+`reset`/`destroy` remove it. herdr problems only print a warning — they never
+fail a claude-vm command. `ssh claude-vm-<name>`, `scp` and editors' remote-SSH
+features work with the alias too, with or without herdr.
+
+**Names.** A VM is `claude-vm-` plus its project directory's basename,
+lowercased to `a-z0-9-` and capped at 16 characters (`~/code/My App` →
+`claude-vm-my-app`). A name already taken by another project gets `-2`, `-3`…
+The name is kept in `snapshots/<hash>.name` and shown by `claude-vm list` and
+`claude-vm status`; it is released on `reset`/`destroy`.
+
+**Host key.** herdr's background connections insist on a known host key, so
+the guest's sshd key is created once on the host
+(`~/.claude-vm/keys/ssh_host_ed25519_key`), baked into every base image and
+pinned in `~/.claude-vm/known_hosts` under one `HostKeyAlias`. VMs on a base
+built before this feature get the key installed over SSH the first time they
+start after setup (the snapshot keeps it); only if that fails does start ask
+for `claude-vm rebase`.
+
+**herdr in the guest.** herdr runs its own server inside the VM and looks for
+it in `~/.local/bin/herdr` first. Bake it into the base image with a
+[cloud-init overlay](#cloud-init-overlay), then `claude-vm rebase`:
+
+```yaml
+# ~/.claude-vm/cloud-init.yaml
+runcmd:
+  - runuser -l "$(id -nu 1000)" -c 'curl -fsSL https://herdr.dev/install.sh | sh'
+```
+
+Alternatively run `herdr machine add claude-vm-<name>` once yourself in a
+terminal — herdr then offers to install it (this copy is lost on rebase).
+Registration during `start` never prompts. If host and guest herdr versions
+drift apart, run `herdr --remote claude-vm-<name>` once to update the guest.
+
+Shells herdr opens in the guest source `~/.claude-vm-env` from `~/.bashrc`,
+so `claude` there behaves like a `claude-vm` launch: same transcript
+directory, and your `CLAUDE_ARGS` (default `--dangerously-skip-permissions`)
+added by a `claude` shell function. The same holds for `ssh claude-vm-<name>`
+and the `claude-vm ssh` shell. claude-vm manages the file — it is rewritten
+whenever it differs, on every `claude-vm` connect and every start after
+setup, so `claude-vm config set CLAUDE_ARGS …` reaches existing VMs; don't
+edit it by hand. Use `command claude` to run without the args.
+They start in the home directory — `cd /workspace` first. The guest
+`~/.bashrc` deliberately does not `cd`: Claude Code sources it before every
+Bash tool call, so a `cd` there resets each call to `/workspace` and breaks
+worktrees. Older VMs have that block removed on their next `claude-vm` connect
+or, once `setup-herdr` has run, their next `claude-vm start`.
 
 ### `claude-vm config`
 
@@ -352,7 +424,7 @@ CLAUDE_ARGS="--dangerously-skip-permissions --model sonnet"
 | `BASE_IMAGE_URL` | (from flavor) | URL | Cloud image download URL |
 | `BASE_IMAGE_NAME` | (from flavor) | Filename | Cloud image filename |
 | `FORWARD_PORTS` | (none) | Comma-separated port specs | Extra ports to forward (per-project) |
-| `CLAUDE_ARGS` | `--dangerously-skip-permissions` | Free-form string | Args passed to `claude` inside the VM |
+| `CLAUDE_ARGS` | `--dangerously-skip-permissions` | Free-form string | Args passed to `claude` inside the VM (launches, and a bare `claude` in guest shells via `~/.claude-vm-env`) |
 | `REBASE_BACKUP_PATHS` | (none) | Comma-separated guest paths | Extra paths preserved through `rebase` (see the rebase section) |
 
 ### Priority

@@ -9,6 +9,7 @@ source "$SCRIPT_DIR/config.sh"
 source "$SCRIPT_DIR/virtiofs.sh"
 source "$SCRIPT_DIR/shutdown.sh"
 source "$SCRIPT_DIR/ui.sh"
+source "$SCRIPT_DIR/herdr.sh"
 
 # Build SSH command array for connecting to VM
 # Args: $1 = SSH port
@@ -121,6 +122,58 @@ _guest_project_dir_name() {
     echo "$name"
 }
 
+# Single-quote a string for a POSIX shell
+_sh_quote() {
+    printf "'%s'" "${1//\'/\'\\\'\'}"
+}
+
+# Contents of the guest ~/.claude-vm-env, sourced by the guest ~/.bashrc so
+# shells claude-vm doesn't start itself (herdr panes, `ssh claude-vm-<name>`,
+# the `claude-vm ssh` login shell) match a claude-vm launch: the connect
+# prefix's two exports, plus a `claude` function adding CLAUDE_ARGS. It
+# evals them, because connect_vm hands CLAUDE_ARGS to the remote shell as
+# command text — quotes in it group words there, so they must here too.
+# `exec claude` in connect_vm bypasses functions, so launches never get the
+# args twice.
+# Args: $1 = project directory
+_guest_env_file() {
+    printf '# Managed by claude-vm: rewritten whenever it differs (CLAUDE_ARGS, project name)\n'
+    printf 'export CLAUDE_CONFIG_DIR="$HOME/.claude"\n'
+    printf 'export CLAUDE_CODE_PROJECT_DIR_NAME="%s"\n' "$(_guest_project_dir_name "$1")"
+    printf 'export CLAUDE_VM_CLAUDE_ARGS=%s\n' "$(_sh_quote "${CLAUDE_ARGS:-}")"
+    printf 'claude() { eval "command claude $CLAUDE_VM_CLAUDE_ARGS \\"\\$@\\""; }\n'
+}
+
+# Guest shell test: true when ~/.claude-vm-env holds exactly the expected
+# contents. Args: $1 = project directory
+_guest_env_check_cmd() {
+    local line quoted=""
+    while IFS= read -r line; do
+        quoted+=" $(_sh_quote "$line")"
+    done < <(_guest_env_file "$1")
+    printf '[ "$(cat ~/.claude-vm-env 2>/dev/null)" = "$(printf '"'"'%%s\\n'"'"'%s)" ]' "$quoted"
+}
+
+# Guest shell command rewriting ~/.claude-vm-env only when it differs, so a
+# changed CLAUDE_ARGS reaches VMs without a per-launch write.
+# Args: $1 = project directory
+_guest_env_sync_cmd() {
+    local line quoted=""
+    while IFS= read -r line; do
+        quoted+=" $(_sh_quote "$line")"
+    done < <(_guest_env_file "$1")
+    printf '%s || printf '"'"'%%s\\n'"'"'%s > ~/.claude-vm-env;' "$(_guest_env_check_cmd "$1")" "$quoted"
+}
+
+# Older bases baked a `cd /workspace` block into the guest ~/.bashrc; Claude
+# Code sources ~/.bashrc before every Bash tool call, so it reset each
+# call's cwd. GUEST_STRIP_CD_CMD (guest shell text) removes the block once;
+# the connect prefix and the herdr start check (herdr.sh) both run it.
+GUEST_OLD_CD_LINE='if [ -d /workspace ]; then'
+read -r -d '' GUEST_STRIP_CD_CMD << 'EOF' || true
+{ grep -qxF 'if [ -d /workspace ]; then' "$HOME/.bashrc" && sed -i '/^if \[ -d .workspace \]; then$/,/^fi$/d' "$HOME/.bashrc"; } 2>/dev/null;
+EOF
+
 # Remote-command prefix shared by connect_vm and connect_vm_shell. Exports
 # come before ~/.env is sourced so a user's ~/.env can still override them.
 # CLAUDE_CONFIG_DIR is set to its default location because Claude Code only
@@ -138,12 +191,21 @@ _guest_project_dir_name() {
 # created projects/<name> while history sat in -workspace), entries are
 # moved file-wise with mv -n — session files are UUID-named so nothing
 # collides, and anything that would is left behind in -workspace untouched.
+#
+# Last, ~/.claude-vm-env is rewritten if it differs from what this
+# CLAUDE_ARGS / project name produce (a no-op compare otherwise).
+#
+# The guarded command before it strips the `cd /workspace` block older bases
+# baked into ~/.bashrc. Claude Code sources ~/.bashrc before every Bash tool
+# call, so that block moved each call back to /workspace and silently undid
+# any cd (worktrees under /workspace/.claude/worktrees/ included). The cd
+# above already covers claude-vm's own sessions.
 # Args: $1 = project directory
 _guest_env_prefix() {
     local project_dir="$1"
     local dir_name
     dir_name="$(_guest_project_dir_name "$project_dir")"
-    echo "export PATH=\"\$HOME/.local/bin:\$PATH\"; export COLORTERM=truecolor; export CLAUDE_CONFIG_DIR=\"\$HOME/.claude\"; export CLAUDE_CODE_PROJECT_DIR_NAME=\"$dir_name\"; cd /workspace 2>/dev/null; [ -f ~/.env ] && . ~/.env; { [ -f \"\$HOME/.claude.json\" ] && [ ! -f \"\$HOME/.claude/.claude.json\" ] && mkdir -p \"\$HOME/.claude\" && cp \"\$HOME/.claude.json\" \"\$HOME/.claude/.claude.json\"; } 2>/dev/null; { [ -n \"\$CLAUDE_CODE_PROJECT_DIR_NAME\" ] && [ -d \"\$HOME/.claude/projects/-workspace\" ] && { [ ! -e \"\$HOME/.claude/projects/\$CLAUDE_CODE_PROJECT_DIR_NAME\" ] && mv \"\$HOME/.claude/projects/-workspace\" \"\$HOME/.claude/projects/\$CLAUDE_CODE_PROJECT_DIR_NAME\" || { for _f in \"\$HOME/.claude/projects/-workspace/\"* \"\$HOME/.claude/projects/-workspace/\".[!.]*; do [ -e \"\$_f\" ] && mv -n \"\$_f\" \"\$HOME/.claude/projects/\$CLAUDE_CODE_PROJECT_DIR_NAME/\"; done; rmdir \"\$HOME/.claude/projects/-workspace\"; }; }; } 2>/dev/null;"
+    echo "export PATH=\"\$HOME/.local/bin:\$PATH\"; export COLORTERM=truecolor; export CLAUDE_CONFIG_DIR=\"\$HOME/.claude\"; export CLAUDE_CODE_PROJECT_DIR_NAME=\"$dir_name\"; cd /workspace 2>/dev/null; [ -f ~/.env ] && . ~/.env; { [ -f \"\$HOME/.claude.json\" ] && [ ! -f \"\$HOME/.claude/.claude.json\" ] && mkdir -p \"\$HOME/.claude\" && cp \"\$HOME/.claude.json\" \"\$HOME/.claude/.claude.json\"; } 2>/dev/null; { [ -n \"\$CLAUDE_CODE_PROJECT_DIR_NAME\" ] && [ -d \"\$HOME/.claude/projects/-workspace\" ] && { [ ! -e \"\$HOME/.claude/projects/\$CLAUDE_CODE_PROJECT_DIR_NAME\" ] && mv \"\$HOME/.claude/projects/-workspace\" \"\$HOME/.claude/projects/\$CLAUDE_CODE_PROJECT_DIR_NAME\" || { for _f in \"\$HOME/.claude/projects/-workspace/\"* \"\$HOME/.claude/projects/-workspace/\".[!.]*; do [ -e \"\$_f\" ] && mv -n \"\$_f\" \"\$HOME/.claude/projects/\$CLAUDE_CODE_PROJECT_DIR_NAME/\"; done; rmdir \"\$HOME/.claude/projects/-workspace\"; }; }; } 2>/dev/null; $GUEST_STRIP_CD_CMD $(_guest_env_sync_cmd "$project_dir")"
 }
 
 # Connect to a running VM — launches Claude Code by default
@@ -226,8 +288,10 @@ _build_rsync_sudo_cmd() {
 # Sync host config into the guest VM
 # Syncs: ~/.claude/, ~/.claude.json, ~/.gitconfig, ~/.config/gh/, ~/.config/glab-cli/
 # Uses rsync for incremental transfer (only changed files after first launch)
+# Args: $1 = SSH port, $2 = project directory (optional; writes ~/.claude-vm-env)
 sync_claude_config_to_vm() {
     local port="$1"
+    local project_dir="${2:-}"
 
     _build_ssh_cmd "$port"
     local ssh_cmd=("${_ssh_cmd[@]}")
@@ -267,6 +331,15 @@ sync_claude_config_to_vm() {
         "${_rsync_cmd[@]}" "$HOME/.claude.json" "$VM_USER@localhost:~/.claude/.claude.json" 2>/dev/null
     else
         "${ssh_cmd[@]}" "echo '{\"hasCompletedOnboarding\":true}' > ~/.claude/.claude.json" 2>/dev/null
+    fi
+
+    # ── Shell env ─────────────────────────────────────────────────────────
+    # The connect prefix exports these for claude-vm's own sessions; the
+    # guest ~/.bashrc sources this file so shells claude-vm didn't start
+    # (herdr panes, `ssh claude-vm-<name>`) use the same transcript dir.
+    # Fixed per project, so writing it once at VM creation is enough.
+    if [[ -n "$project_dir" ]]; then
+        _guest_env_file "$project_dir" | "${ssh_cmd[@]}" "cat > ~/.claude-vm-env" 2>/dev/null
     fi
 
     # ── Git config ────────────────────────────────────────────────────────
@@ -544,7 +617,7 @@ launch_vm() {
 
     # Sync Claude Code config — only on first VM creation
     if [[ "$is_new_vm" == true ]]; then
-        ui_phase "Syncing config" sync_claude_config_to_vm "$ssh_port"
+        ui_phase "Syncing config" sync_claude_config_to_vm "$ssh_port" "$project_dir"
     fi
 
     # Restore VM state saved by `claude-vm rebase` (overlays host-sync so
@@ -552,6 +625,9 @@ launch_vm() {
     if declare -f _has_pending_restore &>/dev/null && _has_pending_restore "$project_dir"; then
         ui_phase "Restoring VM state from rebase" _restore_one_vm "$project_dir" "$ssh_port"
     fi
+
+    # ssh alias + herdr machine (no-op until `claude-vm setup-herdr`)
+    herdr_vm_started "$project_dir" "$ssh_port"
 
     # Drop into Claude Code, or report readiness without attaching (start)
     if [[ "$no_attach" == true ]]; then

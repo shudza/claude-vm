@@ -5,6 +5,33 @@
 
 set -euo pipefail
 
+# known_hosts name for the shared guest host key (ssh HostKeyAlias)
+VM_HOST_KEY_ALIAS="claude-vm"
+
+# Guest ~/.bashrc line loading the per-project env file (launch.sh writes it)
+GUEST_ENV_SOURCE_LINE='[ -f "$HOME/.claude-vm-env" ] && . "$HOME/.claude-vm-env"'
+
+# Ensure the guest SSH host key exists and known_hosts pins it.
+# The key is created once on the host and baked into every base image
+# (cloud-init ssh_keys), so all VMs present one identity that survives
+# rebuilds and flavor switches. claude-vm's own ssh calls skip host-key
+# checks, but herdr's background connections force StrictHostKeyChecking=yes,
+# so the claude-vm-* aliases (herdr.sh) verify against this pin via
+# HostKeyAlias — one entry covers every VM regardless of its port.
+ensure_vm_host_key() {
+    local key known type data
+    key="$(vm_host_key_path)"
+    known="$(vm_known_hosts_path)"
+    if [[ ! -f "$key" ]]; then
+        mkdir -p "$(dirname "$key")"
+        chmod 700 "$(dirname "$key")"
+        ssh-keygen -t ed25519 -f "$key" -N "" -C "claude-vm-host" -q
+        chmod 600 "$key"
+    fi
+    read -r type data _ < "${key}.pub"
+    printf '%s %s %s\n' "$VM_HOST_KEY_ALIAS" "$type" "$data" > "$known"
+}
+
 # Generate cloud-init user-data for base image provisioning
 # Dispatches to flavor-specific sections for packages and runcmd
 generate_cloud_init_userdata() {
@@ -22,6 +49,12 @@ generate_cloud_init_userdata() {
     fi
     local pub_key
     pub_key=$(cat "${key_path}.pub")
+
+    # Host key the guest sshd presents (pinned on the host, see above)
+    ensure_vm_host_key
+    local host_key_private host_key_public
+    host_key_private="$(sed 's/^/    /' "$(vm_host_key_path)")"
+    host_key_public="$(cat "$(vm_host_key_path).pub")"
 
     # Flavor-specific: packages list
     local packages_block
@@ -79,6 +112,13 @@ users:
     ssh_authorized_keys:
       - $pub_key
 
+# Fixed sshd host key shared by every claude-vm guest (ssh -A in runcmd only
+# fills in the other key types)
+ssh_keys:
+  ed25519_private: |
+$host_key_private
+  ed25519_public: $host_key_public
+
 $packages_block
 
 write_files:
@@ -99,9 +139,9 @@ $prefetch_file
     content: |
       export PATH="\$HOME/.local/bin:\$PATH"
       [ -z "\$COLORTERM" ] && export COLORTERM=truecolor
-      if [ -d /workspace ]; then
-        cd /workspace 2>/dev/null
-      fi
+      # Per-project Claude Code env written on first launch, so shells not
+      # started by claude-vm (herdr panes, ssh claude-vm-<name>) match it
+      $GUEST_ENV_SOURCE_LINE
     permissions: '0644'
     defer: true
   - path: /etc/modules-load.d/virtiofs.conf

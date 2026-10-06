@@ -17,6 +17,8 @@ _resolve_source() {
 }
 SCRIPT_DIR="$(_resolve_source)"
 LIB_DIR="$SCRIPT_DIR/lib"
+# Absolute path of this script — the ssh ProxyCommand calls back into it
+CLAUDE_VM_BIN="$(readlink -f "${BASH_SOURCE[0]}")"
 
 # Source library modules
 source "$LIB_DIR/config.sh"
@@ -24,6 +26,7 @@ source "$LIB_DIR/build.sh"
 source "$LIB_DIR/launch.sh"
 source "$LIB_DIR/rebase.sh"
 source "$LIB_DIR/cloud-init.sh"
+source "$LIB_DIR/herdr.sh"
 
 # Show usage information
 usage() {
@@ -53,6 +56,7 @@ Usage:
   claude-vm config set cloud-init FILE Import an overlay file ('-' for stdin)
   claude-vm config get cloud-init     Show overlay path and status
   claude-vm rebase [--force] [--yes]  Rebuild base image, migrate VM state
+  claude-vm setup-herdr [--remove]    Add 'ssh claude-vm-<name>' aliases; show VMs in herdr
   claude-vm help                      Show this help
 
 Flavors:
@@ -493,6 +497,7 @@ cmd_reset() {
     if [[ -f "$snap_path" ]]; then
         local hash
         hash="$(project_hash "$project_dir")"
+        herdr_vm_removed "$hash"
         rm -f "$snap_path" "$SNAPSHOTS_DIR/${hash}.project" "$SNAPSHOTS_DIR/${hash}.ports"
         echo "Project snapshot removed: $snap_path"
         echo "Next launch will create a fresh snapshot from base image."
@@ -541,6 +546,10 @@ cmd_destroy() {
             fi
         fi
 
+        # Forget the herdr machines and the ~/.ssh/config include we added
+        herdr_remove_all_machines
+        _remove_user_ssh_include
+
         # Stop all running VMs and virtiofsd daemons
         if [[ -d "$RUN_DIR" ]]; then
             for run_subdir in "$RUN_DIR"/*/; do
@@ -586,6 +595,9 @@ destroy_project() {
         # VM not running, but virtiofsd might be orphaned — clean it up
         _kill_pid_file "$run_dir/virtiofsd.pid"
     fi
+
+    # Release the VM name and its herdr machine
+    herdr_vm_removed "$(project_hash "$project_dir")"
 
     # Remove project snapshot
     if [[ -f "$snap_path" ]]; then
@@ -648,7 +660,11 @@ cmd_list() {
             fi
 
             echo "  $label"
-            echo "    $hash  $size  [$status]"
+            if [[ -s "$SNAPSHOTS_DIR/${hash}.name" ]]; then
+                echo "    $hash  $size  [$status]  ${VM_ALIAS_PREFIX}$(cat "$SNAPSHOTS_DIR/${hash}.name")"
+            else
+                echo "    $hash  $size  [$status]"
+            fi
             (( ++count ))
         done < <(
             {
@@ -689,6 +705,11 @@ cmd_status() {
 
     echo "Project: $project_dir"
     echo "Hash: $(project_hash "$project_dir")"
+    local name_file
+    name_file="$SNAPSHOTS_DIR/$(project_hash "$project_dir").name"
+    if [[ -s "$name_file" ]]; then
+        echo "SSH alias: ${VM_ALIAS_PREFIX}$(cat "$name_file")"
+    fi
     echo ""
 
     local snap_path
@@ -772,6 +793,22 @@ cmd_show() {
     echo "${_ssh_cmd[*]}"
 }
 
+# setup-herdr command — see setup_herdr in lib/herdr.sh
+cmd_setup_herdr() {
+    setup_herdr "$@"
+}
+
+# proxy command — ssh ProxyCommand for the claude-vm-* aliases (internal)
+# Args: $1 = host alias as typed (claude-vm-<name>)
+cmd_proxy() {
+    if [[ $# -ne 1 ]]; then
+        echo "Usage: claude-vm proxy claude-vm-<name>   (used by ssh ProxyCommand)" >&2
+        return 1
+    fi
+    load_config
+    vm_proxy "$1"
+}
+
 # Main dispatch
 main() {
     local cmd="${1:-}"
@@ -819,6 +856,12 @@ main() {
             ;;
         rebase)
             cmd_rebase "$@"
+            ;;
+        setup-herdr)
+            cmd_setup_herdr "$@"
+            ;;
+        proxy)
+            cmd_proxy "$@"
             ;;
         help|--help|-h)
             usage

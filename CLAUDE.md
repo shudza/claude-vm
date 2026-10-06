@@ -31,7 +31,25 @@ keybindings.json, mcp.json, CLAUDE.md only — never runtime state.
 `~/.claude/projects/<name>` instead of `-workspace` (the name is only honored with a config
 dir set; with it set, Claude Code reads the global json from `$CLAUDE_CONFIG_DIR/.claude.json`).
 Pre-0.1.3 VMs are migrated by guarded commands in the connect prefix (cp json, mv -workspace,
-merging file-wise with mv -n when projects/<name> already exists).
+merging file-wise with mv -n when projects/<name> already exists), and strip the old
+`cd /workspace` block from guest `~/.bashrc` (`GUEST_STRIP_CD_CMD`; `prepare_vm_for_herdr`
+runs it too, for VMs only ever started + used via herdr). Never `cd` in the baked `.bashrc`: Claude Code
+sources it before every Bash tool call, so it would reset each call's cwd (breaks worktrees).
+Guest `~/.claude-vm-env` (`_guest_env_file`: the two exports + a `claude()` function that
+evals `CLAUDE_ARGS` in, like connect_vm's remote command text) is sourced by the baked guest
+`~/.bashrc`, so herdr panes / `ssh claude-vm-<name>` / `claude-vm ssh` match a launch. It is
+managed: written at VM creation, and rewritten only when it differs by the connect prefix
+(`_guest_env_sync_cmd`) and by `prepare_vm_for_herdr` (older VMs also get the `.bashrc` line).
+
+**SSH aliases / herdr:** `setup-herdr` writes `~/.claude-vm/ssh_config` (static
+`Host claude-vm-*`, `ProxyCommand claude-vm proxy %n` → name in `<hash>.name` → current
+port) and, with consent, prepends an `Include` to `~/.ssh/config` — herdr only resolves
+hosts via OpenSSH config. Guest host key is generated on the host
+(`keys/ssh_host_ed25519_key`), baked in via cloud-init `ssh_keys`, pinned in
+`known_hosts` with `HostKeyAlias claude-vm` (herdr forces strict checking); VMs on older
+bases get it installed over SSH on first start after setup (`prepare_vm_for_herdr`: one strict probe per start, each fix only while its piece is missing). Hooks:
+launch → `herdr machine add|enable`, stop → `disable` (sequential after `stop_vms_parallel`),
+reset/destroy → `remove`. herdr failures warn only, never fail a command.
 MCP servers live in `~/.claude.json` (not `~/.claude/`): only user-scoped (`mcpServers`)
 carry over; local-scoped (`projects["<host-path>"]`) don't — the VM mounts at `/workspace`.
 
@@ -49,6 +67,7 @@ carry over; local-scoped (`projects["<host-path>"]`) don't — the VM mounts at 
 | `lib/virtiofs.sh` | virtiofsd binary detection, guest mount management |
 | `lib/ui.sh` | Spinner, phase execution with log capture, status messages |
 | `lib/rebase.sh` | Base image rebuild with per-VM state migration |
+| `lib/herdr.sh` | VM names, `claude-vm-*` ssh aliases + `proxy`, `setup-herdr`, herdr start/stop/remove hooks |
 
 ## Conventions
 

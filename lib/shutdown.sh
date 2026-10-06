@@ -17,6 +17,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/ui.sh"
+source "$SCRIPT_DIR/herdr.sh"
 
 # Timeout constants
 ACPI_SHUTDOWN_TIMEOUT=15     # seconds to wait for ACPI shutdown
@@ -126,6 +127,9 @@ shutdown_vm() {
     # Step 6: Clean up runtime artifacts only (NOT the snapshot)
     _cleanup_runtime "$run_dir"
 
+    # stop_vms_parallel disables herdr machines itself, one at a time
+    [[ "${_HERDR_DEFER_STOP:-}" == true ]] || herdr_vm_stopped "$(basename "$run_dir")"
+
     ui_done "Stopped"
     return 0
 }
@@ -180,6 +184,7 @@ stop_vms_parallel() {
         (
             _UI_QUIET=true
             _UI_RICH=false
+            _HERDR_DEFER_STOP=true
             stop_vm_by_run_dir "$d"
         ) > "${d%/}/stop.log" 2>&1 &
         pids+=($!)
@@ -201,9 +206,12 @@ stop_vms_parallel() {
     done
     ui_progress_clear
 
+    # herdr rewrites its whole machine catalog per change, so concurrent
+    # disables from the subshells could drop each other's updates
     for i in "${!pids[@]}"; do
         if wait "${pids[$i]}"; then
             (( ++STOPPED_COUNT )) || true
+            herdr_vm_stopped "$(basename "${dirs[$i]%/}")"
         else
             FAILED_RUN_DIRS+=("${dirs[$i]}")
         fi
@@ -262,6 +270,7 @@ shutdown_vm_from_run_dir() {
     ui_phase "Stopping VM" _do_shutdown
     ui_phase "Stopping filesystem sharing" _stop_virtiofsd "$run_dir"
     _cleanup_runtime "$run_dir"
+    [[ "${_HERDR_DEFER_STOP:-}" == true ]] || herdr_vm_stopped "$hash"
     ui_done "Stopped"
 }
 
