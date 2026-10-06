@@ -193,11 +193,29 @@ systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
 SCRIPT
 }
 
-# Make sure a VM presents the pinned host key, installing it into older
-# VMs. Args: $1 = SSH port
+# Older bases also lack the ~/.bashrc line sourcing ~/.claude-vm-env, and
+# VMs created before it existed lack the file. Add whichever is missing so
+# herdr panes use the project's transcript dir. Both steps are guarded.
+# Args: $1 = SSH port, $2 = project directory
+_upgrade_guest_env() {
+    local port="$1" project_dir="$2"
+    _build_ssh_cmd "$port"
+    # The line holds no single quotes, so '...' carries it verbatim
+    "${_ssh_cmd[@]}" "sh -s" << SCRIPT
+grep -qxF '$GUEST_ENV_SOURCE_LINE' ~/.bashrc 2>/dev/null || printf '%s\n' '$GUEST_ENV_SOURCE_LINE' >> ~/.bashrc
+[ -f ~/.claude-vm-env ] || cat > ~/.claude-vm-env << 'ENV'
+$(_guest_env_file "$project_dir")
+ENV
+SCRIPT
+}
+
+# Make sure a VM presents the pinned host key. Older VMs get it installed,
+# together with the guest env upgrade — the same VMs need both, once.
+# Args: $1 = SSH port, $2 = project directory
 ensure_vm_host_key_pinned() {
-    local port="$1" tries
+    local port="$1" project_dir="$2" tries
     vm_host_key_pinned "$port" && return 0
+    _upgrade_guest_env "$port" "$project_dir" >>"${_UI_LOG:-/dev/null}" 2>&1 || true
     _pin_vm_host_key "$port" >>"${_UI_LOG:-/dev/null}" 2>&1 || return 1
     # sshd's reload re-execs it; give the new listener a moment
     for tries in 1 2 3 4 5; do
@@ -307,7 +325,7 @@ herdr_vm_started() {
         ui_warn "herdr: ~/.ssh/config does not include $(vm_ssh_config_path) — run 'claude-vm setup-herdr'"
         return 0
     fi
-    if ! ensure_vm_host_key_pinned "$port"; then
+    if ! ensure_vm_host_key_pinned "$port" "$project_dir"; then
         ui_warn "herdr: could not install the pinned host key in this VM — run 'claude-vm rebase' to use it with herdr"
         return 0
     fi

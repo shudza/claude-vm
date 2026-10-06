@@ -33,7 +33,8 @@ dir set; with it set, Claude Code reads the global json from `$CLAUDE_CONFIG_DIR
 Pre-0.1.3 VMs are migrated by guarded commands in the connect prefix (cp json, mv -workspace,
 merging file-wise with mv -n when projects/<name> already exists).
 First VM creation also writes guest `~/.claude-vm-env` (the two exports), sourced by the
-baked guest `~/.bashrc`, so herdr panes / `ssh claude-vm-<name>` get them too.
+baked guest `~/.bashrc`, so herdr panes / `ssh claude-vm-<name>` get them too (older VMs:
+`_upgrade_guest_env`, run alongside the host-key install).
 
 **SSH aliases / herdr:** `setup-herdr` writes `~/.claude-vm/ssh_config` (static
 `Host claude-vm-*`, `ProxyCommand claude-vm proxy %n` → name in `<hash>.name` → current

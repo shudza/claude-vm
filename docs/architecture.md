@@ -147,6 +147,8 @@ is `Include $HOME/.ssh/config`).
   host and baked into base images via cloud-init `ssh_keys`. VMs on older
   bases get it written over SSH once (in place, then `systemctl reload`) —
   claude-vm's own ssh calls skip host-key checks, so they can still log in.
+  The same one-time step appends the `~/.claude-vm-env` source line to the
+  guest `~/.bashrc` and writes the env file if either is missing.
 - Lifecycle hooks: launch → `herdr machine add`/`enable`; stop → `disable`;
   reset/destroy → `remove` and the name is released. All are no-ops before
   setup and only warn on failure.

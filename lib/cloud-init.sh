@@ -8,6 +8,9 @@ set -euo pipefail
 # known_hosts name for the shared guest host key (ssh HostKeyAlias)
 VM_HOST_KEY_ALIAS="claude-vm"
 
+# Guest ~/.bashrc line loading the per-project env file (launch.sh writes it)
+GUEST_ENV_SOURCE_LINE='[ -f "$HOME/.claude-vm-env" ] && . "$HOME/.claude-vm-env"'
+
 # Ensure the guest SSH host key exists and known_hosts pins it.
 # The key is created once on the host and baked into every base image
 # (cloud-init ssh_keys), so all VMs present one identity that survives
@@ -141,7 +144,7 @@ $prefetch_file
       fi
       # Per-project Claude Code env written on first launch, so shells not
       # started by claude-vm (herdr panes, ssh claude-vm-<name>) match it
-      [ -f "\$HOME/.claude-vm-env" ] && . "\$HOME/.claude-vm-env"
+      $GUEST_ENV_SOURCE_LINE
     permissions: '0644'
     defer: true
   - path: /etc/modules-load.d/virtiofs.conf

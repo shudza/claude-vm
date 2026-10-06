@@ -82,6 +82,10 @@ for a in "$@"; do
         cat > "$FAKE_LOG.env"
         exit 0
     fi
+    if [[ "$a" == "sh -s" ]]; then
+        cat > "$FAKE_LOG.upgrade"
+        exit 0
+    fi
     if [[ "$a" == "sudo sh -s" ]]; then
         cat > "$FAKE_LOG.pin"
         [[ "${SSH_PIN_FIXES:-}" == true ]] && touch "$FAKE_LOG.pinned"
@@ -102,7 +106,7 @@ EOF
 chmod +x "$FAKE_BIN"/*
 
 reset_state() {
-    rm -f "$FAKE_LOG" "$FAKE_LOG.env" "$FAKE_LOG.pin" "$FAKE_LOG.pinned" "$HERDR_CATALOG" "$SNAPSHOTS_DIR"/*.name \
+    rm -f "$FAKE_LOG" "$FAKE_LOG.env" "$FAKE_LOG.pin" "$FAKE_LOG.pinned" "$FAKE_LOG.upgrade" "$HERDR_CATALOG" "$SNAPSHOTS_DIR"/*.name \
         "$(vm_ssh_config_path)" "$HOME/.ssh/config" "$HOME/.ssh/config.claude-vm.bak"
     rm -rf "${RUN_DIR:?}"/*
     SSH_RESOLVES=true SSH_HOSTKEY_EXIT=0 HERDR_ADD_EXIT=0 SSH_PIN_FIXES=false
@@ -361,10 +365,49 @@ test_start_hook_pins_old_base() {
     SSH_HOSTKEY_EXIT=255 SSH_PIN_FIXES=true
     local out
     out="$(herdr_vm_started /work/web 10050 2>&1)"
-    if [[ -s "$FAKE_LOG.pin" && "$out" != *"rebase"* ]] && logged "herdr machine add claude-vm-web"; then
-        pass "start hook: installs the pinned host key into an older VM, then registers"
+    if [[ -s "$FAKE_LOG.pin" && -s "$FAKE_LOG.upgrade" && "$out" != *"rebase"* ]] \
+        && logged "herdr machine add claude-vm-web"; then
+        pass "start hook: older VM gets the host key and env upgrade, then registers"
     else
         fail "start hook: pin old base" "$out"
+    fi
+}
+
+test_pinned_vm_skips_upgrades() {
+    reset_state
+    fake_setup
+    herdr_vm_started /work/web 10050 2>/dev/null
+    if [[ ! -e "$FAKE_LOG.pin" && ! -e "$FAKE_LOG.upgrade" ]]; then
+        pass "start hook: a VM already on the pinned key is left untouched"
+    else
+        fail "start hook: pinned VM" "pin or upgrade ran"
+    fi
+}
+
+# Run the captured env upgrade for real in a scratch guest home
+test_env_upgrade_script() {
+    reset_state
+    _upgrade_guest_env 10050 "/work/My App" >/dev/null 2>&1
+    local home="$TEST_DIR/guest-home"
+    rm -rf "$home"; mkdir -p "$home"
+    printf 'export PATH="$HOME/.local/bin:$PATH"\n' > "$home/.bashrc"
+    HOME="$home" sh -s < "$FAKE_LOG.upgrade"
+    HOME="$home" sh -s < "$FAKE_LOG.upgrade"
+    local got
+    got="$(HOME="$home" bash -c '. "$HOME/.bashrc"; echo "$CLAUDE_CODE_PROJECT_DIR_NAME:$CLAUDE_CONFIG_DIR"')"
+    if [[ "$(grep -cxF "$GUEST_ENV_SOURCE_LINE" "$home/.bashrc")" == 1 \
+          && "$(head -1 "$home/.bashrc")" == 'export PATH="$HOME/.local/bin:$PATH"' \
+          && "$got" == "MyApp:$home/.claude" ]]; then
+        pass "env upgrade: appends the .bashrc line once and writes ~/.claude-vm-env"
+    else
+        fail "env upgrade" "got=$got bashrc=$(cat "$home/.bashrc")"
+    fi
+    echo 'export CLAUDE_CODE_PROJECT_DIR_NAME="custom"' > "$home/.claude-vm-env"
+    HOME="$home" sh -s < "$FAKE_LOG.upgrade"
+    if grep -q custom "$home/.claude-vm-env"; then
+        pass "env upgrade: an existing ~/.claude-vm-env is kept"
+    else
+        fail "env upgrade: existing file" "overwritten"
     fi
 }
 
@@ -517,6 +560,8 @@ test_setup_remove
 test_start_hook_inactive_without_setup
 test_start_hook_warns_unresolved
 test_start_hook_pins_old_base
+test_pinned_vm_skips_upgrades
+test_env_upgrade_script
 test_start_hook_warns_when_pin_fails
 test_pin_script_installs_key
 test_start_hook_add_enable

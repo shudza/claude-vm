@@ -122,6 +122,14 @@ _guest_project_dir_name() {
     echo "$name"
 }
 
+# Contents of the guest ~/.claude-vm-env: the connect prefix's two exports,
+# for shells claude-vm doesn't start (sourced by the guest ~/.bashrc)
+# Args: $1 = project directory
+_guest_env_file() {
+    printf 'export CLAUDE_CONFIG_DIR="$HOME/.claude"\n'
+    printf 'export CLAUDE_CODE_PROJECT_DIR_NAME="%s"\n' "$(_guest_project_dir_name "$1")"
+}
+
 # Remote-command prefix shared by connect_vm and connect_vm_shell. Exports
 # come before ~/.env is sourced so a user's ~/.env can still override them.
 # CLAUDE_CONFIG_DIR is set to its default location because Claude Code only
@@ -278,10 +286,7 @@ sync_claude_config_to_vm() {
     # (herdr panes, `ssh claude-vm-<name>`) use the same transcript dir.
     # Fixed per project, so writing it once at VM creation is enough.
     if [[ -n "$project_dir" ]]; then
-        "${ssh_cmd[@]}" "cat > ~/.claude-vm-env" 2>/dev/null << ENV
-export CLAUDE_CONFIG_DIR="\$HOME/.claude"
-export CLAUDE_CODE_PROJECT_DIR_NAME="$(_guest_project_dir_name "$project_dir")"
-ENV
+        _guest_env_file "$project_dir" | "${ssh_cmd[@]}" "cat > ~/.claude-vm-env" 2>/dev/null
     fi
 
     # ── Git config ────────────────────────────────────────────────────────

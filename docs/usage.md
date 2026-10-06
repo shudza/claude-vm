@@ -81,7 +81,7 @@ Quoting follows native `ssh host "cmd"`: quote the *whole* remote command when i
 
 ### Transcript directory inside the VM
 
-Every project mounts at `/workspace`, so by default Claude Code would keep every VM's transcripts under `~/.claude/projects/-workspace`. `claude-vm` sets `CLAUDE_CODE_PROJECT_DIR_NAME` to the project's directory name (restricted to `A-Za-z0-9_-`, max 64 chars — Claude Code silently ignores anything else; `my-app` for `~/code/my-app`), so transcripts land in `~/.claude/projects/my-app` instead. `CLAUDE_CONFIG_DIR` is also set to its default `~/.claude`, because Claude Code only honors the name when a config dir is explicitly set; as a consequence the guest's global config json lives at `~/.claude/.claude.json` (the sync and rebase handle this). To override either, export the variable from `~/.env` inside the VM — it is sourced after the defaults are set. Shells that `claude-vm` doesn't start itself (herdr panes, `ssh claude-vm-<name>`) get the same two variables from `~/.claude-vm-env`, which the guest `~/.bashrc` sources; it is written when the VM is created (bases built before this file existed need `claude-vm rebase` for the `.bashrc` line). VMs created before this feature are migrated automatically on their next connect: the config json is copied to the new location and `projects/-workspace` is renamed to the project name; if the target directory already exists, entries are merged file-wise without overwriting anything (one-time and idempotent).
+Every project mounts at `/workspace`, so by default Claude Code would keep every VM's transcripts under `~/.claude/projects/-workspace`. `claude-vm` sets `CLAUDE_CODE_PROJECT_DIR_NAME` to the project's directory name (restricted to `A-Za-z0-9_-`, max 64 chars — Claude Code silently ignores anything else; `my-app` for `~/code/my-app`), so transcripts land in `~/.claude/projects/my-app` instead. `CLAUDE_CONFIG_DIR` is also set to its default `~/.claude`, because Claude Code only honors the name when a config dir is explicitly set; as a consequence the guest's global config json lives at `~/.claude/.claude.json` (the sync and rebase handle this). To override either, export the variable from `~/.env` inside the VM — it is sourced after the defaults are set. Shells that `claude-vm` doesn't start itself (herdr panes, `ssh claude-vm-<name>`) get the same two variables from `~/.claude-vm-env`, which the guest `~/.bashrc` sources; it is written when the VM is created. VMs from before this feature get the file and the `.bashrc` line added once, on their first start after `claude-vm setup-herdr`. VMs created before this feature are migrated automatically on their next connect: the config json is copied to the new location and `projects/-workspace` is renamed to the project name; if the target directory already exists, entries are merged file-wise without overwriting anything (one-time and idempotent).
 
 ### `claude-vm cp`
 
@@ -302,7 +302,8 @@ Registration during `start` never prompts. If host and guest herdr versions
 drift apart, run `herdr --remote claude-vm-<name>` once to update the guest.
 
 Shells herdr opens in the guest start in `/workspace` and source
-`~/.claude-vm-env` (written when the VM is created) from `~/.bashrc`, so
+`~/.claude-vm-env` (written when the VM is created, or added to older VMs
+together with the host key) from `~/.bashrc`, so
 `claude` there uses the same transcript directory as `claude-vm` itself.
 
 ### `claude-vm config`
