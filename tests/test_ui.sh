@@ -48,6 +48,7 @@ test_plain_success() {
     local output
     output=$(
         unset CLAUDE_VM_FORCE_TTY
+        exec 2>&1  # ui_init checks -t 2: a terminal stderr would force rich mode
         ui_init "$UI_LOG"
         ui_phase "doing the thing" true 2>&1
     )
@@ -71,6 +72,7 @@ test_plain_failure() {
     local output
     output=$(
         unset CLAUDE_VM_FORCE_TTY
+        exec 2>&1  # ui_init checks -t 2: a terminal stderr would force rich mode
         ui_init "$UI_LOG"
         ui_phase "doing the thing" false 2>&1
     )
@@ -168,6 +170,7 @@ test_progress_modes() {
     )
     plain_out=$(
         unset CLAUDE_VM_FORCE_TTY
+        exec 2>&1  # ui_init checks -t 2: a terminal stderr would force rich mode
         ui_init "$UI_LOG"
         ui_progress "working (1/3)" 2>&1
         ui_progress_clear 2>&1

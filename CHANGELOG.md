@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-06
+
 ### Added
 
 - New `claude-vm setup-herdr` makes every VM reachable as `ssh claude-vm-<name>` (project basename, max 16 chars) and shows running VMs in [herdr](https://herdr.dev) as saved machines. It writes `~/.claude-vm/ssh_config` — one static `Host claude-vm-*` block whose `ProxyCommand` (`claude-vm proxy`) finds the VM's current port — and, after asking, adds an `Include` for it at the top of `~/.ssh/config` (backup kept; `--remove` undoes it). VMs register in herdr when they start, are disabled when stopped and removed on reset/destroy; herdr problems only warn. The guest needs herdr installed, e.g. via a cloud-init overlay (see docs/usage.md).
@@ -16,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New `claude-vm cp SRC DST` command copies a host file or directory into the running VM over SSH. `-r` is always on, so directories need no flag. The destination is a guest path: `.` and relative paths resolve under the project's `/workspace` mount, `~` is the VM user's home, and absolute paths pass through.
 - New `claude-vm start [DIR]` boots the sandbox and returns to your shell without opening Claude Code. Use it to bring the VM up first, then attach later with `claude-vm ssh [DIR]`.
 - New `claude-vm config set cloud-init` opens `~/.claude-vm/cloud-init.yaml` in `$EDITOR` (or imports a file, or `-` for stdin) so the base image's cloud-init provisioning can be extended without editing `claude-vm`. The overlay is merged into the generated user-data as a second cloud-config part with a list-append merge type, so `packages`, `runcmd` and `write_files` entries are added to the baked ones instead of replacing them, and the sandbox's own user/SSH-key/virtiofs/installer steps are untouched. `claude-vm config get cloud-init` reports its path and status, `claude-vm config unset cloud-init` removes it, and `claude-vm config show` lists it. An overlay cloud-init could not load — invalid YAML, several documents, or a non-mapping root such as a bare command line — is reported at save time and aborts the build, because cloud-init drops an unparseable part with only a log line and the build would otherwise look successful. Since cloud-init runs at provision time, an edited overlay applies to the next base build (`claude-vm rebase` or `claude-vm build --force`). With no overlay file the generated cloud-init is byte-identical to before.
+
+### Changed
+
+- Base images no longer keep the swapfile some cloud images ship (the Arch image's 512M `/swap/swapfile`): provisioning turns swap off, drops the fstab entry and deletes the file, saving the disk space in every base image. Takes effect on the next base build (`claude-vm rebase` or `claude-vm build --force`).
+
+### Fixed
+
+- Claude Code's Bash tool no longer snaps back to `/workspace` before every command inside the VM. The base image's `~/.bashrc` ended with `cd /workspace`, and Claude Code sources `~/.bashrc` for each Bash tool call, so any directory change was silently undone — most visibly, a session in a git worktree (`EnterWorktree`) ran `git`, tests and edits against the main checkout instead. New bases drop the line; existing VMs have it stripped once on their next `claude-vm` connect or start.
 
 ## [0.2.1] - 2026-08-20
 
@@ -86,7 +96,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `claude-vm rebase` command: refreshes the shared base image (Claude Code, OS packages, kernel) while preserving each project VM's persistent state by extracting `~/.claude/`, `~/.claude.json`, `~/.gitconfig`, and `~/.config/gh/` to a per-project backup directory, rebuilding the base from upstream, and lazy-restoring the extracted state on the project's next launch.
 
-[Unreleased]: https://github.com/shudza/claude-vm/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/shudza/claude-vm/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/shudza/claude-vm/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/shudza/claude-vm/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/shudza/claude-vm/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/shudza/claude-vm/compare/v0.1.1-alpha...v0.1.2
