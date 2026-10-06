@@ -41,7 +41,7 @@ mkdir -p "$FAKE_BIN"
 export PATH="$FAKE_BIN:$PATH"
 export FAKE_LOG="$TEST_DIR/calls.log"
 export HERDR_CATALOG="$TEST_DIR/herdr-catalog"
-export SSH_RESOLVES=true SSH_HOSTKEY_EXIT=0 HERDR_ADD_EXIT=0
+export SSH_RESOLVES=true SSH_HOSTKEY_EXIT=0 HERDR_ADD_EXIT=0 SSH_PIN_FIXES=false
 
 # herdr: a tab-separated catalog (id label target session state)
 cat > "$FAKE_BIN/herdr" << 'EOF'
@@ -67,8 +67,9 @@ case "$2" in
 esac
 EOF
 
-# ssh: -G answers config queries; anything else is the host key check, or
-# the env-file write during config sync (stdin is captured)
+# ssh: -G answers config queries; "sudo sh -s" is the host key install
+# (script captured; with SSH_PIN_FIXES=true later checks pass); anything
+# else is the host key check, or the env-file write during config sync
 cat > "$FAKE_BIN/ssh" << 'EOF'
 #!/usr/bin/env bash
 echo "ssh $*" >> "$FAKE_LOG"
@@ -81,9 +82,18 @@ for a in "$@"; do
         cat > "$FAKE_LOG.env"
         exit 0
     fi
+    if [[ "$a" == "sudo sh -s" ]]; then
+        cat > "$FAKE_LOG.pin"
+        [[ "${SSH_PIN_FIXES:-}" == true ]] && touch "$FAKE_LOG.pinned"
+        exit 0
+    fi
 done
+[[ -f "$FAKE_LOG.pinned" ]] && exit 0
 exit "${SSH_HOSTKEY_EXIT:-0}"
 EOF
+
+# The pin retry loop sleeps between checks; tests needn't wait
+printf '#!/bin/sh\n' > "$FAKE_BIN/sleep"
 
 cat > "$FAKE_BIN/socat" << 'EOF'
 #!/usr/bin/env bash
@@ -92,10 +102,10 @@ EOF
 chmod +x "$FAKE_BIN"/*
 
 reset_state() {
-    rm -f "$FAKE_LOG" "$FAKE_LOG.env" "$HERDR_CATALOG" "$SNAPSHOTS_DIR"/*.name \
+    rm -f "$FAKE_LOG" "$FAKE_LOG.env" "$FAKE_LOG.pin" "$FAKE_LOG.pinned" "$HERDR_CATALOG" "$SNAPSHOTS_DIR"/*.name \
         "$(vm_ssh_config_path)" "$HOME/.ssh/config" "$HOME/.ssh/config.claude-vm.bak"
     rm -rf "${RUN_DIR:?}"/*
-    SSH_RESOLVES=true SSH_HOSTKEY_EXIT=0 HERDR_ADD_EXIT=0
+    SSH_RESOLVES=true SSH_HOSTKEY_EXIT=0 HERDR_ADD_EXIT=0 SSH_PIN_FIXES=false
 }
 
 # Mark a project's VM as running on a port (qemu.pid = this shell)
@@ -345,16 +355,53 @@ test_start_hook_warns_unresolved() {
     fi
 }
 
-test_start_hook_warns_old_base() {
+test_start_hook_pins_old_base() {
+    reset_state
+    fake_setup
+    SSH_HOSTKEY_EXIT=255 SSH_PIN_FIXES=true
+    local out
+    out="$(herdr_vm_started /work/web 10050 2>&1)"
+    if [[ -s "$FAKE_LOG.pin" && "$out" != *"rebase"* ]] && logged "herdr machine add claude-vm-web"; then
+        pass "start hook: installs the pinned host key into an older VM, then registers"
+    else
+        fail "start hook: pin old base" "$out"
+    fi
+}
+
+test_start_hook_warns_when_pin_fails() {
     reset_state
     fake_setup
     SSH_HOSTKEY_EXIT=255
     local out
     out="$(herdr_vm_started /work/web 10050 2>&1)"
-    if [[ "$out" == *"claude-vm rebase"* ]] && ! logged "herdr machine add"; then
-        pass "start hook: unpinned host key asks for a rebase instead of registering"
+    if [[ -s "$FAKE_LOG.pin" && "$out" == *"claude-vm rebase"* ]] && ! logged "herdr machine add"; then
+        pass "start hook: a key that still doesn't match asks for a rebase instead of registering"
     else
-        fail "start hook: old base" "$out"
+        fail "start hook: pin failure" "$out"
+    fi
+}
+
+# Run the captured install script for real against a scratch /etc/ssh
+# (no sudo, systemctl stubbed): it must write the pinned key in place
+test_pin_script_installs_key() {
+    reset_state
+    _pin_vm_host_key 10050 >/dev/null 2>&1
+    local etc="$TEST_DIR/etc-ssh" stub="$TEST_DIR/stub-bin"
+    mkdir -p "$etc" "$stub"
+    printf 'old\n' > "$etc/ssh_host_ed25519_key"
+    chmod 640 "$etc/ssh_host_ed25519_key"
+    printf '#!/bin/sh\necho "systemctl $*" >> "%s"\n' "$FAKE_LOG" > "$stub/systemctl"
+    chmod +x "$stub/systemctl"
+    local rc=0
+    sed "s|/etc/ssh|$etc|" "$FAKE_LOG.pin" | PATH="$stub:$PATH" sh -s >/dev/null 2>&1 || rc=$?
+    if (( rc == 0 )) \
+        && cmp -s "$etc/ssh_host_ed25519_key" "$(vm_host_key_path)" \
+        && cmp -s "$etc/ssh_host_ed25519_key.pub" "$(vm_host_key_path).pub" \
+        && [[ "$(stat -c %a "$etc/ssh_host_ed25519_key")" == 640 ]] \
+        && logged "systemctl reload ssh"; then
+        pass "pin script: writes key + pub in place (mode kept) and reloads sshd"
+    else
+        fail "pin script" "rc=$rc mode=$(stat -c %a "$etc/ssh_host_ed25519_key")"
     fi
 }
 
@@ -469,7 +516,9 @@ test_setup_yes_registers_running
 test_setup_remove
 test_start_hook_inactive_without_setup
 test_start_hook_warns_unresolved
-test_start_hook_warns_old_base
+test_start_hook_pins_old_base
+test_start_hook_warns_when_pin_fails
+test_pin_script_installs_key
 test_start_hook_add_enable
 test_host_key_check_quotes_known_hosts
 test_start_hook_add_failure_is_soft

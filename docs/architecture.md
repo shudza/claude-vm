@@ -144,8 +144,9 @@ is `Include $HOME/.ssh/config`).
   consent; `setup-herdr --remove` and `destroy --all` take it out again.
 - herdr forces `StrictHostKeyChecking=yes` on background connections, so the
   guest host key is pinned: `keys/ssh_host_ed25519_key` is generated on the
-  host and baked into base images via cloud-init `ssh_keys`. claude-vm's own
-  ssh calls still skip host-key checks.
+  host and baked into base images via cloud-init `ssh_keys`. VMs on older
+  bases get it written over SSH once (in place, then `systemctl reload`) —
+  claude-vm's own ssh calls skip host-key checks, so they can still log in.
 - Lifecycle hooks: launch → `herdr machine add`/`enable`; stop → `disable`;
   reset/destroy → `remove` and the name is released. All are no-ops before
   setup and only warn on failure.

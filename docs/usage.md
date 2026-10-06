@@ -282,7 +282,9 @@ The name is kept in `snapshots/<hash>.name` and shown by `claude-vm list` and
 the guest's sshd key is created once on the host
 (`~/.claude-vm/keys/ssh_host_ed25519_key`), baked into every base image and
 pinned in `~/.claude-vm/known_hosts` under one `HostKeyAlias`. VMs on a base
-built before this feature are reported at start — run `claude-vm rebase`.
+built before this feature get the key installed over SSH the first time they
+start after setup (the snapshot keeps it); only if that fails does start ask
+for `claude-vm rebase`.
 
 **herdr in the guest.** herdr runs its own server inside the VM and looks for
 it in `~/.local/bin/herdr` first. Bake it into the base image with a

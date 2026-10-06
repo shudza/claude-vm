@@ -40,7 +40,8 @@ baked guest `~/.bashrc`, so herdr panes / `ssh claude-vm-<name>` get them too.
 port) and, with consent, prepends an `Include` to `~/.ssh/config` — herdr only resolves
 hosts via OpenSSH config. Guest host key is generated on the host
 (`keys/ssh_host_ed25519_key`), baked in via cloud-init `ssh_keys`, pinned in
-`known_hosts` with `HostKeyAlias claude-vm` (herdr forces strict checking). Hooks:
+`known_hosts` with `HostKeyAlias claude-vm` (herdr forces strict checking); VMs on older
+bases get it installed over SSH on first start after setup (`ensure_vm_host_key_pinned`). Hooks:
 launch → `herdr machine add|enable`, stop → `disable` (sequential after `stop_vms_parallel`),
 reset/destroy → `remove`. herdr failures warn only, never fail a command.
 MCP servers live in `~/.claude.json` (not `~/.claude/`): only user-scoped (`mcpServers`)

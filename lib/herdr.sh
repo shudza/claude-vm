@@ -150,7 +150,7 @@ vm_proxy() {
 }
 
 # Strict check that a VM presents the pinned host key. Bases built before
-# host keys were pinned fail it until `claude-vm rebase`. The inner quotes
+# host keys were pinned fail it until _pin_vm_host_key runs. The inner quotes
 # matter: UserKnownHostsFile takes a space-separated list of files.
 # Args: $1 = SSH port
 vm_host_key_pinned() {
@@ -164,6 +164,47 @@ vm_host_key_pinned() {
         -o "UserKnownHostsFile=\"$(vm_known_hosts_path)\"" \
         -o LogLevel=ERROR \
         -p "$port" "$VM_USER@localhost" true </dev/null &>/dev/null
+}
+
+# Give a running VM whose base predates pinning the pinned host key.
+# claude-vm's own ssh skips host-key checks, so it can still log in; the
+# snapshot keeps the change, so this happens once per VM. The key file is
+# overwritten in place to keep its owner, mode and SELinux label (Fedora
+# labels host keys sshd_key_t). sshd re-reads host keys on reload; a
+# socket-activated sshd (Ubuntu) reads them per connection anyway.
+# Args: $1 = SSH port
+_pin_vm_host_key() {
+    local port="$1" key
+    key="$(vm_host_key_path)"
+    _build_ssh_cmd "$port"
+    "${_ssh_cmd[@]}" "sudo sh -s" << SCRIPT
+set -e
+k=/etc/ssh/ssh_host_ed25519_key
+t=\$(mktemp)
+trap 'rm -f "\$t"' EXIT
+cat > "\$t" << 'KEY'
+$(cat "$key")
+KEY
+[ "\$(ssh-keygen -y -f "\$t" | cut -d' ' -f1-2)" = "$(cut -d' ' -f1-2 "${key}.pub")" ]
+[ -e "\$k" ] || install -m 600 /dev/null "\$k"
+cat "\$t" > "\$k"
+printf '%s\n' '$(cat "${key}.pub")' > "\$k.pub"
+systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+SCRIPT
+}
+
+# Make sure a VM presents the pinned host key, installing it into older
+# VMs. Args: $1 = SSH port
+ensure_vm_host_key_pinned() {
+    local port="$1" tries
+    vm_host_key_pinned "$port" && return 0
+    _pin_vm_host_key "$port" >>"${_UI_LOG:-/dev/null}" 2>&1 || return 1
+    # sshd's reload re-execs it; give the new listener a moment
+    for tries in 1 2 3 4 5; do
+        vm_host_key_pinned "$port" && return 0
+        sleep 1
+    done
+    return 1
 }
 
 # True when the user's OpenSSH config resolves an alias through our proxy
@@ -266,8 +307,8 @@ herdr_vm_started() {
         ui_warn "herdr: ~/.ssh/config does not include $(vm_ssh_config_path) — run 'claude-vm setup-herdr'"
         return 0
     fi
-    if ! vm_host_key_pinned "$port"; then
-        ui_warn "herdr: this VM's base image predates pinned host keys — run 'claude-vm rebase' to use it with herdr"
+    if ! ensure_vm_host_key_pinned "$port"; then
+        ui_warn "herdr: could not install the pinned host key in this VM — run 'claude-vm rebase' to use it with herdr"
         return 0
     fi
 
@@ -374,8 +415,8 @@ the base image with a cloud-init overlay (claude-vm config set cloud-init):
     - runuser -l "$(id -nu 1000)" -c 'curl -fsSL https://herdr.dev/install.sh | sh'
 
 or run `herdr machine add claude-vm-<name>` once in a terminal to install it
-interactively (lost on rebase). VMs on a base built before this feature need
-`claude-vm rebase` for the pinned host key.
+interactively (lost on rebase). VMs on a base built before this feature get
+the pinned host key installed on their first start after setup.
 
   --yes      Don't ask before editing ~/.ssh/config
   --remove   Remove the Include line, the alias config and herdr machines
