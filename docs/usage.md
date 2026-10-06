@@ -301,9 +301,14 @@ terminal — herdr then offers to install it (this copy is lost on rebase).
 Registration during `start` never prompts. If host and guest herdr versions
 drift apart, run `herdr --remote claude-vm-<name>` once to update the guest.
 
-Shells herdr opens in the guest source `~/.claude-vm-env` (written when the
-VM is created, or added to older VMs on their next start) from `~/.bashrc`,
-so `claude` there uses the same transcript directory as `claude-vm` itself.
+Shells herdr opens in the guest source `~/.claude-vm-env` from `~/.bashrc`,
+so `claude` there behaves like a `claude-vm` launch: same transcript
+directory, and your `CLAUDE_ARGS` (default `--dangerously-skip-permissions`)
+added by a `claude` shell function. The same holds for `ssh claude-vm-<name>`
+and the `claude-vm ssh` shell. claude-vm manages the file — it is rewritten
+whenever it differs, on every `claude-vm` connect and every start after
+setup, so `claude-vm config set CLAUDE_ARGS …` reaches existing VMs; don't
+edit it by hand. Use `command claude` to run without the args.
 They start in the home directory — `cd /workspace` first. The guest
 `~/.bashrc` deliberately does not `cd`: Claude Code sources it before every
 Bash tool call, so a `cd` there resets each call to `/workspace` and breaks
@@ -419,7 +424,7 @@ CLAUDE_ARGS="--dangerously-skip-permissions --model sonnet"
 | `BASE_IMAGE_URL` | (from flavor) | URL | Cloud image download URL |
 | `BASE_IMAGE_NAME` | (from flavor) | Filename | Cloud image filename |
 | `FORWARD_PORTS` | (none) | Comma-separated port specs | Extra ports to forward (per-project) |
-| `CLAUDE_ARGS` | `--dangerously-skip-permissions` | Free-form string | Args passed to `claude` inside the VM |
+| `CLAUDE_ARGS` | `--dangerously-skip-permissions` | Free-form string | Args passed to `claude` inside the VM (launches, and a bare `claude` in guest shells via `~/.claude-vm-env`) |
 | `REBASE_BACKUP_PATHS` | (none) | Comma-separated guest paths | Extra paths preserved through `rebase` (see the rebase section) |
 
 ### Priority

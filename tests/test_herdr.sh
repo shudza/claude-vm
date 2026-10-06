@@ -437,12 +437,12 @@ test_env_upgrade_script() {
     else
         fail "env upgrade: cd block" "got=$got bashrc=$(cat "$home/.bashrc")"
     fi
-    echo 'export CLAUDE_CODE_PROJECT_DIR_NAME="custom"' > "$home/.claude-vm-env"
+    echo 'export CLAUDE_CODE_PROJECT_DIR_NAME="stale"' > "$home/.claude-vm-env"
     HOME="$home" sh -s < "$FAKE_LOG.upgrade"
-    if grep -q custom "$home/.claude-vm-env"; then
-        pass "env upgrade: an existing ~/.claude-vm-env is kept"
+    if cmp -s <(_guest_env_file "/work/My App") "$home/.claude-vm-env"; then
+        pass "env upgrade: a stale ~/.claude-vm-env is rewritten"
     else
-        fail "env upgrade: existing file" "overwritten"
+        fail "env upgrade: stale file" "$(cat "$home/.claude-vm-env")"
     fi
 }
 

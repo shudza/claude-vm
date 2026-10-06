@@ -340,6 +340,44 @@ else
 fi
 rm -rf "$BRC_HOME"
 
+# ── Test: ~/.claude-vm-env carries CLAUDE_ARGS via a claude function ────────
+# Shells claude-vm doesn't start (herdr panes, ssh claude-vm-<name>, the
+# claude-vm ssh login shell) must run claude with the configured args.
+echo "--- Test 9g: ~/.claude-vm-env adds CLAUDE_ARGS to a bare claude ---"
+ENV_HOME="$(mktemp -d)"
+mkdir -p "$ENV_HOME/bin"
+printf '#!/bin/sh\nprintf "[%%s]" "$@"\n' > "$ENV_HOME/bin/claude"
+chmod +x "$ENV_HOME/bin/claude"
+saved_claude_args="$CLAUDE_ARGS"
+CLAUDE_ARGS="--dangerously-skip-permissions --model 'a b'"
+_guest_env_file "$CONN_PROJECT" > "$ENV_HOME/.claude-vm-env"
+env_out="$(HOME="$ENV_HOME" PATH="$ENV_HOME/bin:$PATH" bash -c '. "$HOME/.claude-vm-env"; claude -p "x y" '"'"'$HOME'"'"'')"
+if [[ "$env_out" == '[--dangerously-skip-permissions][--model][a b][-p][x y][$HOME]' ]]; then
+    pass "claude function: CLAUDE_ARGS grouped like a launch, user args verbatim"
+else
+    fail "claude function args: $env_out"
+fi
+
+# The connect prefix keeps the file current: written when missing or stale
+# (e.g. CLAUDE_ARGS changed), left alone when it already matches
+rm -f "$ENV_HOME/.claude-vm-env"
+HOME="$ENV_HOME" sh -c "$(_guest_env_prefix "$CONN_PROJECT") true"
+first_ok=false
+cmp -s <(_guest_env_file "$CONN_PROJECT") "$ENV_HOME/.claude-vm-env" && first_ok=true
+touch -d '2000-01-01' "$ENV_HOME/.claude-vm-env"
+HOME="$ENV_HOME" sh -c "$(_guest_env_prefix "$CONN_PROJECT") true"
+untouched=false
+[[ "$(stat -c %Y "$ENV_HOME/.claude-vm-env")" == "$(date -d 2000-01-01 +%s)" ]] && untouched=true
+CLAUDE_ARGS="--model opus"
+HOME="$ENV_HOME" sh -c "$(_guest_env_prefix "$CONN_PROJECT") true"
+if $first_ok && $untouched && grep -qxF "export CLAUDE_VM_CLAUDE_ARGS='--model opus'" "$ENV_HOME/.claude-vm-env"; then
+    pass "connect prefix writes ~/.claude-vm-env, skips a current one, rewrites a stale one"
+else
+    fail "connect prefix env sync: first=$first_ok untouched=$untouched $(cat "$ENV_HOME/.claude-vm-env")"
+fi
+CLAUDE_ARGS="$saved_claude_args"
+rm -rf "$ENV_HOME"
+
 # ── Test: connect_vm_shell runs a one-shot command with the guest env ───────
 # (issue #9: `claude-vm ssh "<cmd>"`)
 echo "--- Test 9c: connect_vm_shell runs a one-shot command ---"

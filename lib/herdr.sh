@@ -200,9 +200,10 @@ systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
 SCRIPT
 }
 
-# Older bases also lack the ~/.bashrc line sourcing ~/.claude-vm-env, and
-# VMs created before it existed lack the file. Add whichever is missing so
-# herdr panes use the project's transcript dir, and strip the old
+# Older bases also lack the ~/.bashrc line sourcing ~/.claude-vm-env, VMs
+# created before it existed lack the file, and a changed CLAUDE_ARGS leaves
+# it stale. Add the line, rewrite the file when it differs (so herdr panes
+# get the transcript dir and CLAUDE_ARGS), and strip the old
 # `cd /workspace` block (GUEST_STRIP_CD_CMD) — a VM only ever started via
 # `claude-vm start` + herdr never runs the connect prefix that would.
 # All steps are guarded.
@@ -213,9 +214,7 @@ _upgrade_guest_env() {
     # The line holds no single quotes, so '...' carries it verbatim
     "${_ssh_cmd[@]}" "sh -s" << SCRIPT
 grep -qxF '$GUEST_ENV_SOURCE_LINE' ~/.bashrc 2>/dev/null || printf '%s\n' '$GUEST_ENV_SOURCE_LINE' >> ~/.bashrc
-[ -f ~/.claude-vm-env ] || cat > ~/.claude-vm-env << 'ENV'
-$(_guest_env_file "$project_dir")
-ENV
+$(_guest_env_sync_cmd "$project_dir")
 $GUEST_STRIP_CD_CMD
 exit 0
 SCRIPT
@@ -234,7 +233,7 @@ SCRIPT
 prepare_vm_for_herdr() {
     local port="$1" project_dir="$2" rc=0 tries
     _strict_vm_ssh "$port" \
-        "grep -qxF '$GUEST_ENV_SOURCE_LINE' ~/.bashrc && test -f ~/.claude-vm-env && ! grep -qxF '$GUEST_OLD_CD_LINE' ~/.bashrc" || rc=$?
+        "grep -qxF '$GUEST_ENV_SOURCE_LINE' ~/.bashrc && $(_guest_env_check_cmd "$project_dir") && ! grep -qxF '$GUEST_OLD_CD_LINE' ~/.bashrc" || rc=$?
     (( rc == 0 )) && return 0
     _upgrade_guest_env "$port" "$project_dir" >>"${_UI_LOG:-/dev/null}" 2>&1 || true
     (( rc == 255 )) || return 0
