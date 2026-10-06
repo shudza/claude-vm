@@ -202,7 +202,10 @@ SCRIPT
 
 # Older bases also lack the ~/.bashrc line sourcing ~/.claude-vm-env, and
 # VMs created before it existed lack the file. Add whichever is missing so
-# herdr panes use the project's transcript dir. Both steps are guarded.
+# herdr panes use the project's transcript dir, and strip the old
+# `cd /workspace` block (GUEST_STRIP_CD_CMD) — a VM only ever started via
+# `claude-vm start` + herdr never runs the connect prefix that would.
+# All steps are guarded.
 # Args: $1 = SSH port, $2 = project directory
 _upgrade_guest_env() {
     local port="$1" project_dir="$2"
@@ -213,22 +216,25 @@ grep -qxF '$GUEST_ENV_SOURCE_LINE' ~/.bashrc 2>/dev/null || printf '%s\n' '$GUES
 [ -f ~/.claude-vm-env ] || cat > ~/.claude-vm-env << 'ENV'
 $(_guest_env_file "$project_dir")
 ENV
+$GUEST_STRIP_CD_CMD
+exit 0
 SCRIPT
 }
 
 # Bring a VM up to what herdr needs: the pinned host key plus the guest env
-# file and its ~/.bashrc line. One strict probe per start checks all three,
+# file, its ~/.bashrc line and no old `cd` block in ~/.bashrc. One strict
+# probe per start checks them all,
 # so up-to-date VMs cost no extra round trip and each fix runs only while
 # its own piece is missing:
 #   0    everything in place
-#   1    host key pinned, guest env incomplete → env upgrade
+#   1    host key pinned, guest env/.bashrc outdated → env upgrade
 #   255  host key not pinned (ssh refused)     → env upgrade + key install
 # Returns non-zero only when the host key still isn't pinned afterwards.
 # Args: $1 = SSH port, $2 = project directory
 prepare_vm_for_herdr() {
     local port="$1" project_dir="$2" rc=0 tries
     _strict_vm_ssh "$port" \
-        "grep -qxF '$GUEST_ENV_SOURCE_LINE' ~/.bashrc && test -f ~/.claude-vm-env" || rc=$?
+        "grep -qxF '$GUEST_ENV_SOURCE_LINE' ~/.bashrc && test -f ~/.claude-vm-env && ! grep -qxF '$GUEST_OLD_CD_LINE' ~/.bashrc" || rc=$?
     (( rc == 0 )) && return 0
     _upgrade_guest_env "$port" "$project_dir" >>"${_UI_LOG:-/dev/null}" 2>&1 || true
     (( rc == 255 )) || return 0

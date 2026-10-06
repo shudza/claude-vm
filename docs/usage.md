@@ -307,7 +307,8 @@ so `claude` there uses the same transcript directory as `claude-vm` itself.
 They start in the home directory — `cd /workspace` first. The guest
 `~/.bashrc` deliberately does not `cd`: Claude Code sources it before every
 Bash tool call, so a `cd` there resets each call to `/workspace` and breaks
-worktrees. Older VMs have that line removed on their next `claude-vm` connect.
+worktrees. Older VMs have that block removed on their next `claude-vm` connect
+or, once `setup-herdr` has run, their next `claude-vm start`.
 
 ### `claude-vm config`
 

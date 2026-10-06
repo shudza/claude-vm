@@ -417,17 +417,25 @@ test_env_upgrade_script() {
     _upgrade_guest_env 10050 "/work/My App" >/dev/null 2>&1
     local home="$TEST_DIR/guest-home"
     rm -rf "$home"; mkdir -p "$home"
-    printf 'export PATH="$HOME/.local/bin:$PATH"\n' > "$home/.bashrc"
+    # An older base's .bashrc: PATH line plus the cd block that must go
+    printf '%s\n' 'export PATH="$HOME/.local/bin:$PATH"' \
+        'if [ -d /workspace ]; then' '  cd /workspace 2>/dev/null' 'fi' > "$home/.bashrc"
+    mkdir -p "$home/elsewhere"
     HOME="$home" sh -s < "$FAKE_LOG.upgrade"
     HOME="$home" sh -s < "$FAKE_LOG.upgrade"
     local got
-    got="$(HOME="$home" bash -c '. "$HOME/.bashrc"; echo "$CLAUDE_CODE_PROJECT_DIR_NAME:$CLAUDE_CONFIG_DIR"')"
+    got="$(cd "$home/elsewhere" && HOME="$home" bash -c '. "$HOME/.bashrc"; echo "$CLAUDE_CODE_PROJECT_DIR_NAME:$CLAUDE_CONFIG_DIR:$PWD"')"
     if [[ "$(grep -cxF "$GUEST_ENV_SOURCE_LINE" "$home/.bashrc")" == 1 \
           && "$(head -1 "$home/.bashrc")" == 'export PATH="$HOME/.local/bin:$PATH"' \
-          && "$got" == "MyApp:$home/.claude" ]]; then
+          && "$got" == "MyApp:$home/.claude:"* ]]; then
         pass "env upgrade: appends the .bashrc line once and writes ~/.claude-vm-env"
     else
         fail "env upgrade" "got=$got bashrc=$(cat "$home/.bashrc")"
+    fi
+    if ! grep -q 'cd /workspace' "$home/.bashrc" && [[ "$got" == *":$home/elsewhere" ]]; then
+        pass "env upgrade: strips the old cd block, so sourcing .bashrc keeps the cwd"
+    else
+        fail "env upgrade: cd block" "got=$got bashrc=$(cat "$home/.bashrc")"
     fi
     echo 'export CLAUDE_CODE_PROJECT_DIR_NAME="custom"' > "$home/.claude-vm-env"
     HOME="$home" sh -s < "$FAKE_LOG.upgrade"

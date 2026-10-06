@@ -130,6 +130,15 @@ _guest_env_file() {
     printf 'export CLAUDE_CODE_PROJECT_DIR_NAME="%s"\n' "$(_guest_project_dir_name "$1")"
 }
 
+# Older bases baked a `cd /workspace` block into the guest ~/.bashrc; Claude
+# Code sources ~/.bashrc before every Bash tool call, so it reset each
+# call's cwd. GUEST_STRIP_CD_CMD (guest shell text) removes the block once;
+# the connect prefix and the herdr start check (herdr.sh) both run it.
+GUEST_OLD_CD_LINE='if [ -d /workspace ]; then'
+read -r -d '' GUEST_STRIP_CD_CMD << 'EOF' || true
+{ grep -qxF 'if [ -d /workspace ]; then' "$HOME/.bashrc" && sed -i '/^if \[ -d .workspace \]; then$/,/^fi$/d' "$HOME/.bashrc"; } 2>/dev/null;
+EOF
+
 # Remote-command prefix shared by connect_vm and connect_vm_shell. Exports
 # come before ~/.env is sourced so a user's ~/.env can still override them.
 # CLAUDE_CONFIG_DIR is set to its default location because Claude Code only
@@ -158,7 +167,7 @@ _guest_env_prefix() {
     local project_dir="$1"
     local dir_name
     dir_name="$(_guest_project_dir_name "$project_dir")"
-    echo "export PATH=\"\$HOME/.local/bin:\$PATH\"; export COLORTERM=truecolor; export CLAUDE_CONFIG_DIR=\"\$HOME/.claude\"; export CLAUDE_CODE_PROJECT_DIR_NAME=\"$dir_name\"; cd /workspace 2>/dev/null; [ -f ~/.env ] && . ~/.env; { [ -f \"\$HOME/.claude.json\" ] && [ ! -f \"\$HOME/.claude/.claude.json\" ] && mkdir -p \"\$HOME/.claude\" && cp \"\$HOME/.claude.json\" \"\$HOME/.claude/.claude.json\"; } 2>/dev/null; { [ -n \"\$CLAUDE_CODE_PROJECT_DIR_NAME\" ] && [ -d \"\$HOME/.claude/projects/-workspace\" ] && { [ ! -e \"\$HOME/.claude/projects/\$CLAUDE_CODE_PROJECT_DIR_NAME\" ] && mv \"\$HOME/.claude/projects/-workspace\" \"\$HOME/.claude/projects/\$CLAUDE_CODE_PROJECT_DIR_NAME\" || { for _f in \"\$HOME/.claude/projects/-workspace/\"* \"\$HOME/.claude/projects/-workspace/\".[!.]*; do [ -e \"\$_f\" ] && mv -n \"\$_f\" \"\$HOME/.claude/projects/\$CLAUDE_CODE_PROJECT_DIR_NAME/\"; done; rmdir \"\$HOME/.claude/projects/-workspace\"; }; }; } 2>/dev/null; { grep -qxF 'if [ -d /workspace ]; then' \"\$HOME/.bashrc\" && sed -i '/^if \\[ -d .workspace \\]; then\$/,/^fi\$/d' \"\$HOME/.bashrc\"; } 2>/dev/null;"
+    echo "export PATH=\"\$HOME/.local/bin:\$PATH\"; export COLORTERM=truecolor; export CLAUDE_CONFIG_DIR=\"\$HOME/.claude\"; export CLAUDE_CODE_PROJECT_DIR_NAME=\"$dir_name\"; cd /workspace 2>/dev/null; [ -f ~/.env ] && . ~/.env; { [ -f \"\$HOME/.claude.json\" ] && [ ! -f \"\$HOME/.claude/.claude.json\" ] && mkdir -p \"\$HOME/.claude\" && cp \"\$HOME/.claude.json\" \"\$HOME/.claude/.claude.json\"; } 2>/dev/null; { [ -n \"\$CLAUDE_CODE_PROJECT_DIR_NAME\" ] && [ -d \"\$HOME/.claude/projects/-workspace\" ] && { [ ! -e \"\$HOME/.claude/projects/\$CLAUDE_CODE_PROJECT_DIR_NAME\" ] && mv \"\$HOME/.claude/projects/-workspace\" \"\$HOME/.claude/projects/\$CLAUDE_CODE_PROJECT_DIR_NAME\" || { for _f in \"\$HOME/.claude/projects/-workspace/\"* \"\$HOME/.claude/projects/-workspace/\".[!.]*; do [ -e \"\$_f\" ] && mv -n \"\$_f\" \"\$HOME/.claude/projects/\$CLAUDE_CODE_PROJECT_DIR_NAME/\"; done; rmdir \"\$HOME/.claude/projects/-workspace\"; }; }; } 2>/dev/null; $GUEST_STRIP_CD_CMD"
 }
 
 # Connect to a running VM — launches Claude Code by default
