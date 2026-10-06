@@ -34,7 +34,7 @@ Pre-0.1.3 VMs are migrated by guarded commands in the connect prefix (cp json, m
 merging file-wise with mv -n when projects/<name> already exists).
 First VM creation also writes guest `~/.claude-vm-env` (the two exports), sourced by the
 baked guest `~/.bashrc`, so herdr panes / `ssh claude-vm-<name>` get them too (older VMs:
-`_upgrade_guest_env`, run alongside the host-key install).
+`_upgrade_guest_env`, run by `prepare_vm_for_herdr` while the file or line is missing).
 
 **SSH aliases / herdr:** `setup-herdr` writes `~/.claude-vm/ssh_config` (static
 `Host claude-vm-*`, `ProxyCommand claude-vm proxy %n` → name in `<hash>.name` → current
@@ -42,7 +42,7 @@ port) and, with consent, prepends an `Include` to `~/.ssh/config` — herdr only
 hosts via OpenSSH config. Guest host key is generated on the host
 (`keys/ssh_host_ed25519_key`), baked in via cloud-init `ssh_keys`, pinned in
 `known_hosts` with `HostKeyAlias claude-vm` (herdr forces strict checking); VMs on older
-bases get it installed over SSH on first start after setup (`ensure_vm_host_key_pinned`). Hooks:
+bases get it installed over SSH on first start after setup (`prepare_vm_for_herdr`: one strict probe per start, each fix only while its piece is missing). Hooks:
 launch → `herdr machine add|enable`, stop → `disable` (sequential after `stop_vms_parallel`),
 reset/destroy → `remove`. herdr failures warn only, never fail a command.
 MCP servers live in `~/.claude.json` (not `~/.claude/`): only user-scoped (`mcpServers`)

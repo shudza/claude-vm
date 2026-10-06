@@ -149,12 +149,12 @@ vm_proxy() {
     cat >&3
 }
 
-# Strict check that a VM presents the pinned host key. Bases built before
-# host keys were pinned fail it until _pin_vm_host_key runs. The inner quotes
+# Run a command in a VM over a connection that only succeeds when the VM
+# presents the pinned host key (ssh exits 255 otherwise). The inner quotes
 # matter: UserKnownHostsFile takes a space-separated list of files.
-# Args: $1 = SSH port
-vm_host_key_pinned() {
-    local port="$1"
+# Args: $1 = SSH port, $2 = remote command
+_strict_vm_ssh() {
+    local port="$1" command="$2"
     ssh -i "$CLAUDE_VM_DIR/keys/id_ed25519" \
         -o IdentitiesOnly=yes \
         -o BatchMode=yes \
@@ -163,7 +163,14 @@ vm_host_key_pinned() {
         -o HostKeyAlias="$VM_HOST_KEY_ALIAS" \
         -o "UserKnownHostsFile=\"$(vm_known_hosts_path)\"" \
         -o LogLevel=ERROR \
-        -p "$port" "$VM_USER@localhost" true </dev/null &>/dev/null
+        -p "$port" "$VM_USER@localhost" "$command" </dev/null &>/dev/null
+}
+
+# Strict check that a VM presents the pinned host key. Bases built before
+# host keys were pinned fail it until _pin_vm_host_key runs.
+# Args: $1 = SSH port
+vm_host_key_pinned() {
+    _strict_vm_ssh "$1" true
 }
 
 # Give a running VM whose base predates pinning the pinned host key.
@@ -209,13 +216,22 @@ ENV
 SCRIPT
 }
 
-# Make sure a VM presents the pinned host key. Older VMs get it installed,
-# together with the guest env upgrade — the same VMs need both, once.
+# Bring a VM up to what herdr needs: the pinned host key plus the guest env
+# file and its ~/.bashrc line. One strict probe per start checks all three,
+# so up-to-date VMs cost no extra round trip and each fix runs only while
+# its own piece is missing:
+#   0    everything in place
+#   1    host key pinned, guest env incomplete → env upgrade
+#   255  host key not pinned (ssh refused)     → env upgrade + key install
+# Returns non-zero only when the host key still isn't pinned afterwards.
 # Args: $1 = SSH port, $2 = project directory
-ensure_vm_host_key_pinned() {
-    local port="$1" project_dir="$2" tries
-    vm_host_key_pinned "$port" && return 0
+prepare_vm_for_herdr() {
+    local port="$1" project_dir="$2" rc=0 tries
+    _strict_vm_ssh "$port" \
+        "grep -qxF '$GUEST_ENV_SOURCE_LINE' ~/.bashrc && test -f ~/.claude-vm-env" || rc=$?
+    (( rc == 0 )) && return 0
     _upgrade_guest_env "$port" "$project_dir" >>"${_UI_LOG:-/dev/null}" 2>&1 || true
+    (( rc == 255 )) || return 0
     _pin_vm_host_key "$port" >>"${_UI_LOG:-/dev/null}" 2>&1 || return 1
     # sshd's reload re-execs it; give the new listener a moment
     for tries in 1 2 3 4 5; do
@@ -325,7 +341,7 @@ herdr_vm_started() {
         ui_warn "herdr: ~/.ssh/config does not include $(vm_ssh_config_path) — run 'claude-vm setup-herdr'"
         return 0
     fi
-    if ! ensure_vm_host_key_pinned "$port" "$project_dir"; then
+    if ! prepare_vm_for_herdr "$port" "$project_dir"; then
         ui_warn "herdr: could not install the pinned host key in this VM — run 'claude-vm rebase' to use it with herdr"
         return 0
     fi

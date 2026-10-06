@@ -41,7 +41,7 @@ mkdir -p "$FAKE_BIN"
 export PATH="$FAKE_BIN:$PATH"
 export FAKE_LOG="$TEST_DIR/calls.log"
 export HERDR_CATALOG="$TEST_DIR/herdr-catalog"
-export SSH_RESOLVES=true SSH_HOSTKEY_EXIT=0 HERDR_ADD_EXIT=0 SSH_PIN_FIXES=false
+export SSH_RESOLVES=true SSH_HOSTKEY_EXIT=0 HERDR_ADD_EXIT=0 SSH_PIN_FIXES=false SSH_PROBE_EXIT=0
 
 # herdr: a tab-separated catalog (id label target session state)
 cat > "$FAKE_BIN/herdr" << 'EOF'
@@ -82,6 +82,12 @@ for a in "$@"; do
         cat > "$FAKE_LOG.env"
         exit 0
     fi
+    if [[ "$a" == "grep -qxF "* ]]; then
+        # strict probe: refused (255) until the key is pinned, then reports
+        # the guest env state
+        [[ -f "$FAKE_LOG.pinned" || "${SSH_HOSTKEY_EXIT:-0}" == 0 ]] || exit "$SSH_HOSTKEY_EXIT"
+        exit "${SSH_PROBE_EXIT:-0}"
+    fi
     if [[ "$a" == "sh -s" ]]; then
         cat > "$FAKE_LOG.upgrade"
         exit 0
@@ -109,7 +115,7 @@ reset_state() {
     rm -f "$FAKE_LOG" "$FAKE_LOG.env" "$FAKE_LOG.pin" "$FAKE_LOG.pinned" "$FAKE_LOG.upgrade" "$HERDR_CATALOG" "$SNAPSHOTS_DIR"/*.name \
         "$(vm_ssh_config_path)" "$HOME/.ssh/config" "$HOME/.ssh/config.claude-vm.bak"
     rm -rf "${RUN_DIR:?}"/*
-    SSH_RESOLVES=true SSH_HOSTKEY_EXIT=0 HERDR_ADD_EXIT=0 SSH_PIN_FIXES=false
+    SSH_RESOLVES=true SSH_HOSTKEY_EXIT=0 HERDR_ADD_EXIT=0 SSH_PIN_FIXES=false SSH_PROBE_EXIT=0
 }
 
 # Mark a project's VM as running on a port (qemu.pid = this shell)
@@ -373,6 +379,21 @@ test_start_hook_pins_old_base() {
     fi
 }
 
+# A VM pinned before the env upgrade existed: key fine, env missing
+test_pinned_vm_without_env_gets_upgrade() {
+    reset_state
+    fake_setup
+    SSH_PROBE_EXIT=1
+    local out
+    out="$(herdr_vm_started /work/web 10050 2>&1)"
+    if [[ -s "$FAKE_LOG.upgrade" && ! -e "$FAKE_LOG.pin" && "$out" != *"rebase"* ]] \
+        && logged "herdr machine add claude-vm-web"; then
+        pass "start hook: already-pinned VM missing the env gets only the env upgrade"
+    else
+        fail "start hook: env-only upgrade" "upgrade=$([[ -s "$FAKE_LOG.upgrade" ]] && echo y) pin=$([[ -e "$FAKE_LOG.pin" ]] && echo y) out=$out"
+    fi
+}
+
 test_pinned_vm_skips_upgrades() {
     reset_state
     fake_setup
@@ -560,6 +581,7 @@ test_setup_remove
 test_start_hook_inactive_without_setup
 test_start_hook_warns_unresolved
 test_start_hook_pins_old_base
+test_pinned_vm_without_env_gets_upgrade
 test_pinned_vm_skips_upgrades
 test_env_upgrade_script
 test_start_hook_warns_when_pin_fails
