@@ -628,6 +628,22 @@ runcmd:
     $ok && pass "overlay merge type keeps the additive contract and baked setup intact"
 }
 
+test_swapfile_removed() {
+    local flavor ud ok
+    for flavor in "${ALL_FLAVORS[@]}"; do
+        ud="$(_userdata "$flavor")"
+        ok=true
+        grep -qF -- '- swapoff -a || true' "$ud" \
+            || { fail "$flavor swap" "runcmd does not swapoff"; ok=false; }
+        grep -qF -- "- sed -i '/swapfile/d' /etc/fstab" "$ud" \
+            || { fail "$flavor swap" "fstab swapfile entry not removed"; ok=false; }
+        # Images without /swap must not fail the line
+        grep -qF -- '- rm -f /swap/swapfile; rmdir /swap 2>/dev/null || true' "$ud" \
+            || { fail "$flavor swap" "swapfile removal missing or not failure-tolerant"; ok=false; }
+        $ok && pass "$flavor: shipped swapfile is disabled and removed"
+    done
+}
+
 # ─── Run ──────────────────────────────────────────────────────────────────────
 
 run_test test_structure_all_flavors
@@ -637,6 +653,7 @@ run_test test_ssh_service_per_distro
 run_test test_pkg_tuning_per_family
 run_test test_deb_src_disabled_before_package_stage
 run_test test_installer_prefetch
+run_test test_swapfile_removed
 run_test test_tuning_precedes_packages_stage
 run_test test_slim_excludes_full_tools
 run_test test_full_includes_build_tools

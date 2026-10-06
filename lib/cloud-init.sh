@@ -187,6 +187,11 @@ runcmd:
   - chown $VM_USER:$VM_USER /workspace
   # Fix ownership of deferred write_files
   - chown -R $VM_USER:$VM_USER /home/$VM_USER/.bashrc /home/$VM_USER/.ssh
+  # Remove the swapfile some cloud images ship (Arch: 512M /swap/swapfile);
+  # the VM doesn't need swap. No-op on images without one.
+  - swapoff -a || true
+  - sed -i '/swapfile/d' /etc/fstab
+  - rm -f /swap/swapfile; rmdir /swap 2>/dev/null || true
   # Claude Code (plus uv on full) installs in the background from bootcmd —
   # wait for the prefetch, then fall back to inline installs if it didn't
   # complete
