@@ -352,6 +352,22 @@ project_backup_dir() {
     echo "$BACKUPS_DIR/$hash"
 }
 
+# SSH host key every guest presents (created on the host, baked into base
+# images by cloud-init) and the known_hosts file pinning it — see
+# ensure_vm_host_key in cloud-init.sh
+vm_host_key_path() {
+    echo "$CLAUDE_VM_DIR/keys/ssh_host_ed25519_key"
+}
+
+vm_known_hosts_path() {
+    echo "$CLAUDE_VM_DIR/known_hosts"
+}
+
+# SSH client config with the claude-vm-* host aliases (see herdr.sh)
+vm_ssh_config_path() {
+    echo "$CLAUDE_VM_DIR/ssh_config"
+}
+
 # Get the base image path for the current FLAVOR (the provisioned golden
 # image). Each flavor gets its own base so multiple flavors can coexist.
 base_image_path() {

@@ -44,7 +44,8 @@ base-debian-full.qcow2 (golden image, ~1.5GB)
 7. Wait for SSH to become available (polls up to 60s)
 8. Verify virtiofs mount in guest (mount test + read/write verification)
 9. Sync host config into guest via rsync (~/.claude/, ~/.gitconfig, ~/.config/gh/, ~/.config/glab-cli/)
-10. `exec` into SSH session running Claude Code, with `CLAUDE_CODE_PROJECT_DIR_NAME` set to the sanitized project basename so the guest's transcript dir is `~/.claude/projects/<name>` rather than `-workspace` (`claude-vm ssh` shells get the same export)
+10. If `setup-herdr` was run: assign the VM's alias name, refresh `~/.claude-vm/ssh_config`, and register/enable it in herdr (warn-only)
+11. `exec` into SSH session running Claude Code, with `CLAUDE_CODE_PROJECT_DIR_NAME` set to the sanitized project basename so the guest's transcript dir is `~/.claude/projects/<name>` rather than `-workspace` (`claude-vm ssh` shells get the same export)
 
 All output goes to `~/.claude-vm/run/<hash>/launch.log`. In an interactive terminal
 the user sees a single status line that redraws in place per phase (spinner + phase
@@ -62,6 +63,7 @@ with the log path and a tail of recent errors.
 4. Stop virtiofsd
 5. Verify snapshot file integrity (exists, non-empty)
 6. Clean up runtime artifacts (PID files, sockets) -- snapshot is **never** deleted
+7. Disable the VM's herdr machine, if any (`stop --all` does this sequentially after the parallel stops: herdr rewrites its whole catalog per change)
 
 `stop --all` and `rebase` stop all running VMs concurrently, showing a single
 `(k/N)` progress line; per-VM output goes to `~/.claude-vm/run/<hash>/stop.log`.
@@ -124,15 +126,43 @@ MCP server definitions are *not* stored under `~/.claude/` -- they live in `~/.c
 
 Only **user-scoped** MCP servers carry over automatically. For a server you want in the VM, either add it user-scoped (`claude mcp add -s user ...`) on the host, or re-add it with `claude mcp add` from inside the VM (`claude-vm ssh`). The legacy `~/.claude/mcp.json` is synced too, but `claude mcp add` no longer writes there.
 
+## SSH Aliases and herdr
+
+`claude-vm setup-herdr` makes VMs addressable as `claude-vm-<name>` for any
+OpenSSH client, which is how [herdr](https://herdr.dev) reaches remote
+machines: it only resolves hosts via the user's ssh config (its saved machines
+store just the target string, and it runs `ssh -F <temp file>` whose first line
+is `Include $HOME/.ssh/config`).
+
+- `~/.claude-vm/ssh_config` holds one static `Host claude-vm-*` block:
+  `User`, `IdentityFile`, `HostKeyAlias claude-vm`, `UserKnownHostsFile
+  ~/.claude-vm/known_hosts` and `ProxyCommand env CLAUDE_VM_DIR=… claude-vm
+  proxy %n`. The proxy maps the name to its project (`snapshots/<hash>.name`),
+  checks the VM is running and pipes stdio to `127.0.0.1:<ssh_port>` (socat,
+  or bash `/dev/tcp`) — dynamic ports never need a config rewrite.
+- `~/.ssh/config` gets one `Include` line at the top, only with the user's
+  consent; `setup-herdr --remove` and `destroy --all` take it out again.
+- herdr forces `StrictHostKeyChecking=yes` on background connections, so the
+  guest host key is pinned: `keys/ssh_host_ed25519_key` is generated on the
+  host and baked into base images via cloud-init `ssh_keys`. claude-vm's own
+  ssh calls still skip host-key checks.
+- Lifecycle hooks: launch → `herdr machine add`/`enable`; stop → `disable`;
+  reset/destroy → `remove` and the name is released. All are no-ops before
+  setup and only warn on failure.
+
 ## Directory Layout
 
 ```
 ~/.claude-vm/
   config                   User configuration file
   cloud-init.yaml          Optional user cloud-init overlay (merged into base user-data)
+  ssh_config               claude-vm-* host aliases (setup-herdr)
+  known_hosts              Pins the shared guest host key (HostKeyAlias claude-vm)
   keys/
     id_ed25519             SSH keypair for VM access
     id_ed25519.pub
+    ssh_host_ed25519_key   Guest sshd host key, baked into base images
+    ssh_host_ed25519_key.pub
   base/
     base-<flavor>.qcow2    Provisioned golden image (one per flavor)
     <cloud-image>          Downloaded cloud image (cached)
@@ -140,6 +170,7 @@ Only **user-scoped** MCP servers carry over automatically. For a server you want
     <hash>.qcow2           Per-project linked snapshot
     <hash>.project          Project directory path (sidecar)
     <hash>.ports            Per-project forward port config (sidecar)
+    <hash>.name             VM alias name (claude-vm-<name>), assigned after setup-herdr
   backups/
     <hash>/                 Per-project state extracted during rebase (removed after restore)
       .claude/              Claude Code settings, credentials, plugins
@@ -186,3 +217,4 @@ while the base image is built, so overlay edits apply to the next base build.
 | `lib/virtiofs.sh` | virtiofsd binary detection, guest mount management |
 | `lib/ui.sh` | Spinner, log capture, status output |
 | `lib/rebase.sh` | Base image rebuild with per-VM state migration |
+| `lib/herdr.sh` | VM names, `claude-vm-*` ssh aliases + proxy, `setup-herdr`, herdr lifecycle hooks |

@@ -584,6 +584,58 @@ phase_cp() {
         /workspace/existing /tmp/cp-abs.txt" 2>/dev/null || true
 }
 
+# ── Phase 3c: ssh aliases (setup-herdr) ────────────────────────────────────
+
+phase_ssh_alias() {
+    echo ""
+    echo "=== Phase 3c: ssh aliases ==="
+    _require_phase "ssh-alias" || return
+
+    # Scratch HOME so the real ~/.ssh/config is never touched; herdr is not
+    # on PATH there, so only the aliases are exercised
+    local fake_home="$E2E_DIR/alias-home" output
+    mkdir -p "$fake_home"
+    output=$(HOME="$fake_home" PATH="/usr/bin:/bin" timeout 60 bash "$CLAUDE_VM" setup-herdr --yes 2>&1) || true
+    if grep -qxF "Include \"$CLAUDE_VM_DIR/ssh_config\"" "$fake_home/.ssh/config" 2>/dev/null \
+        && echo "$output" | grep -q "claude-vm-project-a"; then
+        pass "setup-herdr: include added, running VM named claude-vm-project-a"
+    else
+        fail "setup-herdr" "output: $output"
+    fi
+
+    # Through the generated config: ProxyCommand port lookup plus the pinned
+    # host key under strict checking (what herdr enforces)
+    local alias_ssh=(ssh -F "$CLAUDE_VM_DIR/ssh_config" -o BatchMode=yes -o ConnectTimeout=10)
+    output=$("${alias_ssh[@]}" claude-vm-project-a hostname 2>&1) || true
+    if [[ "$output" == *claude-vm* ]]; then
+        pass "ssh claude-vm-project-a: proxy + pinned host key"
+    else
+        fail "ssh alias" "output: $output"
+    fi
+
+    # Interactive shells (herdr panes) pick up the per-project env file
+    output=$("${alias_ssh[@]}" claude-vm-project-a 'bash -ic "echo \$CLAUDE_CODE_PROJECT_DIR_NAME:\$PWD"' 2>/dev/null) || true
+    if [[ "$output" == *"project-a:/workspace"* ]]; then
+        pass "guest bashrc: sources ~/.claude-vm-env, starts in /workspace"
+    else
+        fail "guest env file" "output: $output"
+    fi
+
+    output=$("${alias_ssh[@]}" claude-vm-nope true 2>&1) || true
+    if [[ "$output" == *"no VM named 'nope'"* ]]; then
+        pass "ssh alias: unknown VM reports a clear error"
+    else
+        fail "ssh alias unknown" "output: $output"
+    fi
+
+    HOME="$fake_home" timeout 30 bash "$CLAUDE_VM" setup-herdr --remove &>/dev/null || true
+    if ! grep -q claude-vm "$fake_home/.ssh/config" 2>/dev/null && [[ ! -f "$CLAUDE_VM_DIR/ssh_config" ]]; then
+        pass "setup-herdr --remove: include and alias config gone"
+    else
+        fail "setup-herdr --remove" "$(cat "$fake_home/.ssh/config" 2>/dev/null)"
+    fi
+}
+
 # ── Phase 4: Stop ───────────────────────────────────────────────────────────
 
 phase_stop() {
@@ -952,6 +1004,7 @@ main() {
     phase_config_sync
     phase_multi_instance
     phase_cp
+    phase_ssh_alias
     phase_stop
     phase_resume
     phase_rebase

@@ -25,6 +25,7 @@ export CLAUDE_VM_DIR="$TEST_DIR/claude-vm-data"
 
 # Source config for helper functions
 source "$PROJECT_DIR/lib/config.sh"
+source "$PROJECT_DIR/lib/herdr.sh"
 
 # Override base_image_exists to avoid needing qemu-img
 base_image_exists() { [[ -f "$(base_image_path)" ]]; }

@@ -9,6 +9,7 @@ source "$SCRIPT_DIR/config.sh"
 source "$SCRIPT_DIR/virtiofs.sh"
 source "$SCRIPT_DIR/shutdown.sh"
 source "$SCRIPT_DIR/ui.sh"
+source "$SCRIPT_DIR/herdr.sh"
 
 # Build SSH command array for connecting to VM
 # Args: $1 = SSH port
@@ -226,8 +227,10 @@ _build_rsync_sudo_cmd() {
 # Sync host config into the guest VM
 # Syncs: ~/.claude/, ~/.claude.json, ~/.gitconfig, ~/.config/gh/, ~/.config/glab-cli/
 # Uses rsync for incremental transfer (only changed files after first launch)
+# Args: $1 = SSH port, $2 = project directory (optional; writes ~/.claude-vm-env)
 sync_claude_config_to_vm() {
     local port="$1"
+    local project_dir="${2:-}"
 
     _build_ssh_cmd "$port"
     local ssh_cmd=("${_ssh_cmd[@]}")
@@ -267,6 +270,18 @@ sync_claude_config_to_vm() {
         "${_rsync_cmd[@]}" "$HOME/.claude.json" "$VM_USER@localhost:~/.claude/.claude.json" 2>/dev/null
     else
         "${ssh_cmd[@]}" "echo '{\"hasCompletedOnboarding\":true}' > ~/.claude/.claude.json" 2>/dev/null
+    fi
+
+    # ── Shell env ─────────────────────────────────────────────────────────
+    # The connect prefix exports these for claude-vm's own sessions; the
+    # guest ~/.bashrc sources this file so shells claude-vm didn't start
+    # (herdr panes, `ssh claude-vm-<name>`) use the same transcript dir.
+    # Fixed per project, so writing it once at VM creation is enough.
+    if [[ -n "$project_dir" ]]; then
+        "${ssh_cmd[@]}" "cat > ~/.claude-vm-env" 2>/dev/null << ENV
+export CLAUDE_CONFIG_DIR="\$HOME/.claude"
+export CLAUDE_CODE_PROJECT_DIR_NAME="$(_guest_project_dir_name "$project_dir")"
+ENV
     fi
 
     # ── Git config ────────────────────────────────────────────────────────
@@ -544,7 +559,7 @@ launch_vm() {
 
     # Sync Claude Code config — only on first VM creation
     if [[ "$is_new_vm" == true ]]; then
-        ui_phase "Syncing config" sync_claude_config_to_vm "$ssh_port"
+        ui_phase "Syncing config" sync_claude_config_to_vm "$ssh_port" "$project_dir"
     fi
 
     # Restore VM state saved by `claude-vm rebase` (overlays host-sync so
@@ -552,6 +567,9 @@ launch_vm() {
     if declare -f _has_pending_restore &>/dev/null && _has_pending_restore "$project_dir"; then
         ui_phase "Restoring VM state from rebase" _restore_one_vm "$project_dir" "$ssh_port"
     fi
+
+    # ssh alias + herdr machine (no-op until `claude-vm setup-herdr`)
+    herdr_vm_started "$project_dir" "$ssh_port"
 
     # Drop into Claude Code, or report readiness without attaching (start)
     if [[ "$no_attach" == true ]]; then
